@@ -1,0 +1,395 @@
+---
+title: "heatmaps"
+author: "Doug Barrows"
+date: "April 4, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(DESeq2)
+###### we will define our gene set by those genes that change in FGFR3 mutant tumors, without considering UTX status
+dds <- readRDS("../../../../../../20181008_FGFR3AMP_vs_mut_lumpap/FGFR3_AMPvMUT_lumpap/FGFR3_AMPvMUT_lumpap_2_dds.RData")
+resultsNames(dds)
+dds <- estimateSizeFactors(dds)
+counts <- as.data.frame(counts(dds, normalized=TRUE))
+#head(counts)
+
+#get the LFC for FGFR3mut
+res_FGFR3mut <- results(dds, name = "genotype_FGFR3MUT_noAMP_vs_noMUT_noAMP")
+  res_FGFR3mut[ grep("FGFR3", rownames(res_FGFR3mut)), ]
+
+FGFR3mut_DE <- as.data.frame(res_FGFR3mut)
+FGFR3mut_DE <- FGFR3mut_DE[order(FGFR3mut_DE$padj),]
+FGFR3mut_DE_padj0.01_L2FC2 <- FGFR3mut_DE[(abs(FGFR3mut_DE$log2FoldChange) > 1 & FGFR3mut_DE$padj < 0.0005), ]
+
+FGFR3mut_DE_padj0.01_L2FC2$UP_DOWN <- ifelse(FGFR3mut_DE_padj0.01_L2FC2$stat > 0, "UP",  "DOWN")
+table(FGFR3mut_DE_padj0.01_L2FC2$UP_DOWN)
+write.table(table(FGFR3mut_DE_padj0.01_L2FC2$UP_DOWN), "lumpap_FGFR3_mutvsAMP_DEgenes_p0005.txt", quote = FALSE, row.names = FALSE)
+up_genes <- rownames(FGFR3mut_DE_padj0.01_L2FC2[FGFR3mut_DE_padj0.01_L2FC2$UP_DOWN == "UP", ])
+down_genes <- rownames(FGFR3mut_DE_padj0.01_L2FC2[FGFR3mut_DE_padj0.01_L2FC2$UP_DOWN == "DOWN", ])
+
+# now we have our list of genes that we are interested in, we have to labels all of the patietns based on the mutation status of all the proteins we will use in the heatmap
+
+patient_list_path <- "../../../../../../alterations_across_samples _FGFR3_UTX_MLL3_4_TCGA2017.tsv"
+genes <-  c("KDM6A", "KMT2C", "KMT2D", "FGFR3")
+
+# this information on the patiens with these particular mutations was downloaded from cBIO portal
+patients <- read.delim(patient_list_path)
+
+# change the column names to only be the gene name and not the long name it is given in TCGA table
+colnames(patients)[5:ncol(patients)] <- gsub("\\..*","",colnames(patients)[5:ncol(patients)])
+
+#extract all rows for patients that have mutations in each protein (only those with mutation of homDEL, so excluding the amplifications as there were only a few and I am intersted in loss of these proteins' function)
+
+
+patients_truncate_splice_homdel <- vector("list", length = length(genes))
+for (i in seq_along(genes)) {
+  names(patients_truncate_splice_homdel)[i] <- genes[i] 
+  patients_truncate_splice_homdel[[i]] <- patients[grepl("\\*|HOMDEL|splice", patients[,colnames(patients) == genes[i]]),]
+}
+
+patients_missense <- vector("list", length = length(genes))
+for (i in seq_along(genes)) {
+  names(patients_missense)[i] <- genes[i] 
+  patients_missense[[i]] <- patients[grepl("MUT", patients[,colnames(patients) == genes[i]]),]
+  patients_missense[[i]] <- patients_missense[[i]][!(patients_missense[[i]]$Sample.ID %in% patients_truncate_splice_homdel[[i]]$Sample.ID), ]
+}
+
+# get just the patient list for tuncating and missense
+
+patient_list_truncate_splice_homdel <- vector("list", length = length(patients_truncate_splice_homdel))
+for (i in seq_along(patients_truncate_splice_homdel)){
+  patient_list_truncate_splice_homdel[[i]] <- as.character(patients_truncate_splice_homdel[[i]]$Sample.ID)
+}
+names(patient_list_truncate_splice_homdel) <- names(patients_truncate_splice_homdel)
+
+patient_list_missense <- vector("list", length = length(patients_missense))
+for (i in seq_along(patients_missense)){
+  patient_list_missense[[i]] <- as.character(patients_missense[[i]]$Sample.ID)
+}
+names(patient_list_missense) <- names(patients_missense)
+
+
+# DESeq2 analysis
+
+# read in RNA seq data
+
+#print("Reading in counts table...")
+#counts <- read.delim(counts_table_path)
+#counts$Hugo_Symbol <- make.unique(as.character(counts$Hugo_Symbol), sep = "_")
+#counts <- na.omit(counts)
+#row.names(counts) <- counts$Hugo_Symbol
+#counts <- counts[c(-1,-2)]
+
+counts[1:ncol(counts)] <- lapply(counts[1:ncol(counts)], as.integer)
+
+library(stringr)
+colnames(counts) <- str_replace_all(colnames(counts), "\\.", "-")
+
+# generally not all paitents that had RNA seq had a full mutational profile, so need to filter the full list from RNA seq table so it only contains patients with full mutational profile
+
+counts <- counts[ , colnames(counts) %in% patients$Sample.ID]
+
+#need to 1 to all values in order to do the log2 transformation
+counts_heat <- counts + 1
+counts_heat <- log2(counts_heat)
+
+library(dplyr)
+meta_data <- read.csv("../../../../../../../../../metadata.csv", header = TRUE, stringsAsFactors = FALSE)
+
+all_lumpap_tumors <- filter(meta_data, (mRNA.cluster == "Luminal_papillary")) %>% dplyr::select(Case.ID)
+counts <- counts[ , substr(colnames(counts), 1, 12) %in% all_lumpap_tumors$Case.ID]
+
+truncate_splice_homdel_label <- vector("list", length = length(patient_list_truncate_splice_homdel))
+for (i in seq_along(patient_list_truncate_splice_homdel)) {
+  truncate_splice_homdel_label[[i]] <- colnames(counts) %in% patient_list_truncate_splice_homdel[[i]]
+}
+names(truncate_splice_homdel_label) <- names(patient_list_truncate_splice_homdel)
+
+missense_label <- vector("list", length = length(patient_list_missense))
+for (i in seq_along(patient_list_missense)) {
+  missense_label[[i]] <- colnames(counts) %in% patient_list_missense[[i]]
+}
+names(missense_label) <- names(patient_list_missense)
+
+# label all the indexes of the patients with either WT, TSD (truncate_splice_delete), or mis (missense)
+mutant_label <- vector("list", length = length(truncate_splice_homdel_label))
+for (i in seq_along(truncate_splice_homdel_label)) {
+  for (x in seq_along(truncate_splice_homdel_label[[i]])) {
+    if (truncate_splice_homdel_label[[i]][x] == "TRUE") {
+    mutant_label[[i]][x] <- paste0(names(truncate_splice_homdel_label[i]), "tsd")
+    }
+    else if (missense_label[[i]][x] == "TRUE") {
+    mutant_label[[i]][x] <- paste0(names(truncate_splice_homdel_label[i]), "mis") # its okay this is the TSD names label, they have same names
+    }
+    else {
+    mutant_label[[i]][x] <- paste0(names(truncate_splice_homdel_label[i]), "wt")
+    }
+  }
+}
+names(mutant_label) <- names(truncate_splice_homdel_label)
+# this should match up with the numbers of alterations above for each gene
+
+lapply(mutant_label, table)
+
+# make one vector that combines all the genotypes
+genes_label <- vector(mode = "character", length = length(mutant_label[[1]]))
+for (i in seq_along(mutant_label)) {
+  if(i == 1) {
+    for (x in seq_along(mutant_label[[1]])) {
+     genes_label[x] <- paste(mutant_label[[i]][x], sep = "_")
+    }
+  }
+  else {
+    for (x in seq_along(mutant_label[[1]])) {
+     genes_label[x] <- paste(genes_label[x], mutant_label[[i]][x], sep = "_")
+    
+    }
+  }
+}
+
+genotype <- factor(genes_label)
+sample_names <- colnames(counts)
+
+
+colData <- data.frame(sample_names, genotype)
+colData <- na.omit(colData)
+table(colData$genotype)
+
+# this for loop simply will make a string that matches the "wt" case for each gene to set the reference level
+
+for (i in seq_along(genes)) {
+  if (i == 1) {
+    ref_level <- ""
+  }
+  ifelse (i == length(genes), ref_level <- paste0(ref_level, genes[i], "wt"), ref_level <- paste0(ref_level, genes[i], "wt_"))
+}
+colData$genotype <- relevel(colData$genotype, ref = ref_level)
+levels(colData$genotype)
+
+######### important
+# this will add a column to colData that indicates if the sample has UTX TSD OR MLL3/4 double TSD 
+
+colData$UTX_MLLdble <- NA
+for (i in seq_along(colData$genotype)) {
+if (grepl("KDM6Atsd|KMT2Ctsd_KMT2Dtsd", colData$genotype[i])) {
+  colData$UTX_MLLdble[i] <- "UTX_MLLdble_tsd"
+}
+else if (grepl("KDM6Awt_KMT2Cwt_KMT2Dwt", colData$genotype[i])){
+  colData$UTX_MLLdble[i] <- "wt"
+}
+  else{
+    colData$UTX_MLLdble[i] <- "UTX_MLL_mis_singlemuts"
+  }
+}
+
+######### important
+# this will add a column to colData that indicates if the sample has UTX TSD 
+
+colData$UTX <- NA
+for (i in seq_along(colData$genotype)) {
+if (grepl("KDM6Atsd", colData$genotype[i])) {
+  colData$UTX[i] <- "KDM6Atsd"
+}
+else if (grepl("KDM6Awt", colData$genotype[i])){
+  colData$UTX[i] <- "KDM6Awt"
+}
+  else{
+    colData$UTX[i] <- "KDM6Amis"
+  }
+}
+
+######### important
+# this will add a column to colData that indicates if the sample has any MLLmutation 
+
+colData$MLLmut <- NA
+for (i in seq_along(colData$genotype)) {
+if (grepl("KMT2Cwt_KMT2Dwt", colData$genotype[i])) {
+  colData$MLLmut[i] <- "MLLwt"
+}
+else {
+  colData$MLLmut[i] <- "MLLmut"
+}
+  
+}
+
+######### important
+# this will add a column to colData that indicates if the sample has FGFR3 missense mutation 
+
+colData$FGFR3mis <- NA
+for (i in seq_along(colData$genotype)) {
+if (grepl("FGFR3mis", colData$genotype[i])) {
+  colData$FGFR3mis[i] <- "FGFR3mis"
+}
+  else{
+    colData$FGFR3mis[i] <- "NOT_FGFR3mis"
+  }
+}
+colData$FGFR3mis <- relevel(as.factor(colData$FGFR3mis), ref = "NOT_FGFR3mis")
+levels(colData$FGFR3mis)
+
+# remove the MLL mutant tumors
+colData <- colData[colData$MLLmut == "MLLwt",]
+colData$combined <- paste(colData$UTX, colData$FGFR3mis, sep = "_")
+
+#use the colData table from above to make separate tables that have the list of patients for each group
+WT_patients <- colData[colData$combined == "KDM6Awt_NOT_FGFR3mis",]
+FGFR3mis_UTXMLLwt_patients <- colData[colData$combined == "KDM6Awt_FGFR3mis",]
+FGFR3wt_UTXtsd_patients <- colData[colData$combined == "KDM6Atsd_NOT_FGFR3mis",]
+FGFR3mis_UTXtsd_patients <- colData[colData$combined == "KDM6Atsd_FGFR3mis",]
+# only one patient with MLL3 trunc and no others, so leaving this out
+# MLL3onlytsd_patients <- colData[colData$genotype == "KDM6Awt_KMT2Ctsd_KMT2Dwt",]
+
+
+#sperate the counts table into separate tables based on genotype
+WT_patients_rpkm <- counts_heat[,colnames(counts_heat) %in% WT_patients$sample_names ]
+FGFR3mis_UTXMLLwt_patients_rpkm <- counts_heat[,colnames(counts_heat) %in% FGFR3mis_UTXMLLwt_patients$sample_names]
+FGFR3wt_UTXtsd_patients_rpkm <- counts_heat[,colnames(counts_heat) %in% FGFR3wt_UTXtsd_patients$sample_names]
+FGFR3mis_UTXtsd_patients_rpkm <- counts_heat[,colnames(counts_heat) %in% FGFR3mis_UTXtsd_patients$sample_names]
+
+#get a vector that has the mean of each row in the first line, then make a data frame (with only one column) that has these averages. I think this second step wasn't necessary for all four spearately, could probably just do this at the end with all the separate vectors for each group. 
+WT_mean <- rowMeans(WT_patients_rpkm)
+WT_mean <- data.frame(WT_mean, row.names = names(WT_mean))
+
+FGFR3mis_UTXMLLwt_mean <- rowMeans(FGFR3mis_UTXMLLwt_patients_rpkm)
+FGFR3mis_UTXMLLwt_mean <- data.frame(FGFR3mis_UTXMLLwt_mean, row.names = names(FGFR3mis_UTXMLLwt_mean))
+
+FGFR3wt_UTXtsd_mean <- rowMeans(FGFR3wt_UTXtsd_patients_rpkm)
+FGFR3wt_UTXtsd_mean <- data.frame(FGFR3wt_UTXtsd_mean, row.names = names(FGFR3wt_UTXtsd_mean))
+
+FGFR3mis_UTXtsd_mean <- rowMeans(FGFR3mis_UTXtsd_patients_rpkm)
+FGFR3mis_UTXtsd_mean <- data.frame(FGFR3mis_UTXtsd_mean, row.names = names(FGFR3mis_UTXtsd_mean))
+
+#filter out the rows in each of these data frames that correspond to the top genes that change in UTXmut compared to WT
+WT_mean_topFGFR3_lumpap <- WT_mean[rownames(WT_mean) %in% rownames(FGFR3mut_DE_padj0.01_L2FC2), , drop = FALSE]
+FGFR3mis_UTXMLLwt_mean_topFGFR3_lumpap <- FGFR3mis_UTXMLLwt_mean[rownames(FGFR3mis_UTXMLLwt_mean) %in% rownames(FGFR3mut_DE_padj0.01_L2FC2), , drop = FALSE]
+FGFR3wt_UTXtsd_mean_topFGFR3_lumpap <- FGFR3wt_UTXtsd_mean[rownames(FGFR3wt_UTXtsd_mean) %in% rownames(FGFR3mut_DE_padj0.01_L2FC2), , drop = FALSE]
+FGFR3mis_UTXtsd_mean_topFGFR3_lumpap <- FGFR3mis_UTXtsd_mean[rownames(FGFR3mis_UTXtsd_mean) %in% rownames(FGFR3mut_DE_padj0.01_L2FC2), , drop = FALSE]
+
+#mean_list <- list(WT_mean_topFGFR3_lumpap, FGFR3mis_UTXMLLwt_mean_topFGFR3_lumpap, MLL34tsd_mean_topFGFR3_lumpap, UTXmutandMLL34tsd_mean_topFGFR3_lumpap)
+
+#merge all of the one column-data frames for the separate groups into one data frame. Tried to do this with a list (see silenced command above) and then using Reduce(merge, mean_list), but R Studio kept crashing, so I did it separately. 
+mean_topFGFR3_lumpap <- merge(WT_mean_topFGFR3_lumpap, FGFR3mis_UTXtsd_mean_topFGFR3_lumpap, by = 0)
+mean_topFGFR3_lumpap <- merge(mean_topFGFR3_lumpap, FGFR3mis_UTXMLLwt_mean_topFGFR3_lumpap, by.x = 1, by.y = 0)
+mean_topFGFR3_lumpap <- merge(mean_topFGFR3_lumpap, FGFR3wt_UTXtsd_mean_topFGFR3_lumpap, by.x = 1, by.y = 0)
+
+
+#the first column are the gene names, easier if they are actually the rownames
+rownames(mean_topFGFR3_lumpap) <- mean_topFGFR3_lumpap$Row.names
+mean_topFGFR3_lumpap <- dplyr::select(mean_topFGFR3_lumpap, -1)
+
+
+
+#to calculate the z-score for each column and at the end of this loop, the z-score columns will be tacked onto the end
+for (x in 5:8) {
+for (i in 1:nrow(mean_topFGFR3_lumpap)) {
+  mean_topFGFR3_lumpap[i,x] <- (mean_topFGFR3_lumpap[i,x-4] - rowMeans(mean_topFGFR3_lumpap[i,1:4]))/sd(mean_topFGFR3_lumpap[i,1:4])
+}
+colnames(mean_topFGFR3_lumpap)[x] <- paste0(colnames(mean_topFGFR3_lumpap)[x-4], "_Z") #change the name of the z-score column
+}
+
+#make a new DF that only has the z-scores
+mean_topFGFR3_lumpap_zscores <- dplyr::select(mean_topFGFR3_lumpap, 5:8)
+colnames(mean_topFGFR3_lumpap_zscores) <- c("WT", "FGFR3mis_UTXtsd", "FGFR3mis_UTXwt", "FGFR3wt_UTXtsd")
+
+#the heatmap function needs a matrix
+#mean_topFGFR3_lumpap_zscores <- as.matrix(mean_topFGFR3_lumpap_zscores)
+mean_topFGFR3_lumpap_zscores <- mean_topFGFR3_lumpap_zscores[,c(1,4,3,2)]
+mean_topFGFR3_lumpap_zscores$gene <- rownames(mean_topFGFR3_lumpap_zscores)
+
+#get mean zscpres for each sample
+
+mean(mean_topFGFR3_lumpap_zscores[,1]) # WT
+mean(mean_topFGFR3_lumpap_zscores[,2]) # FGFR3wt_UTXMLLdble
+mean(mean_topFGFR3_lumpap_zscores[,3])# # FGFR3mis_UTXMLLwt
+mean(mean_topFGFR3_lumpap_zscores[,4])# FGFR3mis_UTXMLLdble
+
+#########
+# make a box plot for z scores, spearating based on whether a gene goes down in the FGFR3 mut vs FGFR3 AMP analysis that defined the genes in this analysis from the beginning 
+#########
+
+#pick out hte genes that go up in the FGFR3 mutant tumors and get their average z scores
+mean_topFGFR3_lumpap_zscores_upinFGFRmut <- mean_topFGFR3_lumpap_zscores[rownames(mean_topFGFR3_lumpap_zscores) %in% up_genes, ]
+
+mean(mean_topFGFR3_lumpap_zscores_upinFGFRmut[,1]) # WT
+mean(mean_topFGFR3_lumpap_zscores_upinFGFRmut[,2]) # FGFR3wt_UTXMLLdble
+mean(mean_topFGFR3_lumpap_zscores_upinFGFRmut[,3]) # FGFR3mis_UTXMLLwt
+mean(mean_topFGFR3_lumpap_zscores_upinFGFRmut[,4]) # FGFR3mis_UTXMLLdble
+
+# ttests
+ttest <- t.test(mean_topFGFR3_lumpap_zscores_upinFGFRmut$FGFR3mis_UTXwt, mean_topFGFR3_lumpap_zscores_upinFGFRmut$FGFR3mis_UTXtsd)
+
+ttest_output <- capture.output(print(ttest))
+writeLines(ttest_output, con = file("./separate_basedon_FGFR3mutvsAMP_UTXonly/ttest_FGFR3mis_wtVS_FGFR3mis_UTXtsd_up.txt"))
+
+# wilcox
+wilcox_up <- wilcox.test(mean_topFGFR3_lumpap_zscores_upinFGFRmut$FGFR3mis_UTXwt, mean_topFGFR3_lumpap_zscores_upinFGFRmut$FGFR3mis_UTXtsd)
+
+wilcox_up_output <- capture.output(print(wilcox_up))
+writeLines(wilcox_up_output, con = file("./separate_basedon_FGFR3mutvsAMP_UTXonly/wilcox_FGFR3mis_wtVS_FGFR3mis_UTXtsd_up.txt"))
+
+
+# plot the data
+library(ggplot2)
+library(tidyr)
+
+upinFGFRmut_toplot <- gather(mean_topFGFR3_lumpap_zscores_upinFGFRmut, key = genotype, value = zscore, WT:FGFR3mis_UTXtsd)
+upinFGFRmut_toplot$genotype <- ordered(upinFGFRmut_toplot$genotype, levels = c("WT", "FGFR3wt_UTXtsd", "FGFR3mis_UTXwt", "FGFR3mis_UTXtsd"))
+ggplot(upinFGFRmut_toplot, mapping = aes(x = genotype, y = zscore)) + 
+  geom_boxplot()
+#ggsave("./separate_basedon_FGFR3mutvsAMP_UTXonly/UTXonly_UPin_FGFR3misvsAMP_p0.0005.pdf", device = "pdf", height = 5, width = 7)
+
+#pick out hte genes that go down in the FGFR3 mutant tumors and get their average z scores
+mean_topFGFR3_lumpap_zscores_downinFGFRmut <- mean_topFGFR3_lumpap_zscores[rownames(mean_topFGFR3_lumpap_zscores) %in% down_genes, ]
+
+mean(mean_topFGFR3_lumpap_zscores_downinFGFRmut[,1]) # WT
+mean(mean_topFGFR3_lumpap_zscores_downinFGFRmut[,2]) # FGFR3wt_UTXMLLdble
+mean(mean_topFGFR3_lumpap_zscores_downinFGFRmut[,3])# # FGFR3mis_UTXMLLwt
+mean(mean_topFGFR3_lumpap_zscores_downinFGFRmut[,4])# FGFR3mis_UTXMLLdble
+
+# ttests
+ttest <- t.test(mean_topFGFR3_lumpap_zscores_downinFGFRmut$FGFR3mis_UTXwt, mean_topFGFR3_lumpap_zscores_downinFGFRmut$FGFR3mis_UTXtsd)
+
+ttest_output <- capture.output(print(ttest))
+writeLines(ttest_output, con = file("./separate_basedon_FGFR3mutvsAMP_UTXonly//ttest_FGFR3mis_wtVS_FGFR3mis_UTXtsd_noMLL_down.txt"))
+
+# wilcox rank sum
+wilcox <- wilcox.test(mean_topFGFR3_lumpap_zscores_downinFGFRmut$FGFR3mis_UTXwt, mean_topFGFR3_lumpap_zscores_downinFGFRmut$FGFR3mis_UTXtsd)
+
+writeLines(text = capture.output(wilcox), con = file("./separate_basedon_FGFR3mutvsAMP_UTXonly//wilcox_FGFR3mis_wtVS_FGFR3mis_UTXtsd_noMLL_down.txt"))
+
+#plot these data
+downinFGFRmut_toplot <- gather(mean_topFGFR3_lumpap_zscores_downinFGFRmut, key = genotype, value = zscore, WT:FGFR3mis_UTXtsd)
+downinFGFRmut_toplot$genotype <- ordered(downinFGFRmut_toplot$genotype, levels = c("WT", "FGFR3wt_UTXtsd", "FGFR3mis_UTXwt", "FGFR3mis_UTXtsd"))
+ggplot(downinFGFRmut_toplot, mapping = aes(x = genotype, y = zscore)) + geom_boxplot()
+ggsave("./separate_basedon_FGFR3mutvsAMP_UTXonly//UTXonly_noMLL_downin_FGFR3misvsAMP_p0.0005.pdf", device = "pdf", height = 5, width = 7)
+
+
+##### make one plot with both up and down!
+mean_topFGFR3_lumpap_zscores$up_down <- ifelse(mean_topFGFR3_lumpap_zscores$gene %in% up_genes, "Up in FGFR3 mutant tumors", 
+                                                    ifelse(mean_topFGFR3_lumpap_zscores$gene %in% down_genes, "Down in FGFR3 mutant tumors", "no_change"))
+
+
+mean_topFGFR3_lumpap_zscores_up_downOnly <- mean_topFGFR3_lumpap_zscores[mean_topFGFR3_lumpap_zscores$up_down %in% c("Up in FGFR3 mutant tumors", "Down in FGFR3 mutant tumors"),]
+
+allUPdown_toplot <- gather(mean_topFGFR3_lumpap_zscores_up_downOnly, key = genotype, value = zscore, WT:FGFR3mis_UTXtsd)
+allUPdown_toplot$genotype <- ordered(allUPdown_toplot$genotype, levels = c("WT", "FGFR3wt_UTXtsd", "FGFR3mis_UTXwt", "FGFR3mis_UTXtsd"))
+ggplot(allUPdown_toplot, mapping = aes(x = genotype, y = zscore, fill = up_down)) + 
+  geom_boxplot() +
+  facet_grid(~up_down) + 
+  theme_light() + 
+  scale_fill_manual(values=c("#FF9999", "#3399FF")) + 
+  theme(legend.title = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text.x = element_text(colour = "black", face = "bold")) + 
+  xlab("") + 
+  ylab("zscore of log2(TPM gene)")
+ggsave("./separate_basedon_FGFR3mutvsAMP_UTXonly//UTXonly_noMLL_UPandDOWN_FGFR3misvsAMP_p0.0005.pdf", device = "pdf", height = 5, width = 7, useDingbats=FALSE)
+
+
+writeLines(con = paste("./separate_basedon_FGFR3mutvsAMP_UTXonly/sessionInfo.txt"), text = capture.output(sessionInfo()))
+```

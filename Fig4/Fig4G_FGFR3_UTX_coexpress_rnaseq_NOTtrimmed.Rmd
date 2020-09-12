@@ -1,0 +1,416 @@
+---
+title: "RNA seq UMUC1 20181222"
+author: "Doug Barrows"
+date: "December 22, 2017"
+output: pdf_document
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE, cache = F}
+knitr::opts_chunk$set(echo = TRUE, error = TRUE)
+```
+### DESeq2 analysis for all samples 
+```{r}
+
+
+#The following code (not evaluated here) can be used to generate a table that connects transcripts to genes for summarizing Salmon transcript quantifications for differential gene expression. We simply read in the GTF file from the same database that we used for building the Salmon index (in this case, Gencode version 26), and then pull out a table with the transcript name for every gene.
+
+library(GenomicFeatures)
+
+### next few lines only need to be run if you havent run them before, otherwise, you can just load the database as shown below
+
+# download.file("ftp://ftp.sanger.ac.uk/pub/gencode/Gencode_human/release_32/gencode.v32.annotation.gtf.gz", "gencode.vh32.annotation.gtf.gz")
+# txdb <- makeTxDbFromGFF("../gencode.v32.annotation.gtf")
+# saveDb(txdb, file="gencode.vh32.sqlite")
+# next time you can just load with this line (no need to makeTxDb...)
+txdb <- loadDb("gencode.vh32.sqlite") 
+columns(txdb)
+k <- keys(txdb, "GENEID")
+res <- AnnotationDbi::select(txdb, k, "TXNAME", "GENEID") #for every gene, tell me the transcripts that are associated with it
+
+tx2gene <- res[,2:1] #this will show a list that has one column with the transcript name, and another column with the corresponding geneID
+head(tx2gene)
+
+
+samplenames <- list.files("../salmon_analysis_1.1.0_NOTtrimmed/quant_../fastq_files/quant_files/") #this is the directory with my Salmon outputs and I wirte their names into a vector 
+
+# differential expression between DMSO and MI503 
+cell_line <- c(rep("EV_EV", 3), rep("EV_UTX", 3), rep("S249C_EV", 3), rep("S249C_UTX", 3), rep("WTFGFR3_EV", 3), rep("WTFGFR3_UTX", 3))
+FGFR3_status <- c(rep("EV", 6), rep("S249C", 6), rep("WTFGFR3", 6))
+colData <- data.frame(samplenames, cell_line, FGFR3_status)
+
+#We have used the run ID (SRR...) to keep track of the reads and quantifications, so we can build a vector which points to our quantification files using this column of coldata. We use names to name this vector with the run IDs as well.
+files_quant <- file.path("../salmon_analysis_1.1.0_NOTtrimmed//quant_../fastq_files/quant_files/",colData$samplenames)
+names(files_quant) <- colData$samplenames
+head(files_quant,2)
+
+
+#Now we can use the tximport function to assemble all the quantifications from the 24 files, and to summarize the abundances, counts and transcript lengths to the gene level, for use with DESeq2 and other Bioconductor packages.
+
+
+library(rjson)
+library(tximport)
+
+
+txi <- tximport(files_quant, type="salmon", tx2gene=tx2gene, ignoreAfterBar = TRUE)
+names(txi)
+dim(txi$abundance)
+dim(txi$counts)
+dim(txi$length)
+
+
+#Now, we will build a DESeqDataSet from the matrices in txi, which we will use for the rest of the workflow. This function brings along the estimated counts per gene, estimated by Salmon, as well as a normalizing offset based on the transcript lengths. This normalizing offset adjusts for the average transcript length of a gene, which can be influenced by differential isoform usage, as well as common RNA-seq biases, if we used Salmon flags for correcting for various biases. Both of these effects -- differential isoform usage and technical biases -- can change the effective length of a gene, and so both are useful as normalizing offsets in a statistical comparisons of counts across samples.
+
+#When building the DESeqDataSet we have to specify a design, which is a formula in R that begins with a tilde and explains what terms, or coefficients, we want to use to model the counts. The design is used by the dispersion estimation and model fitting functions in DESeq2, so we can change it later, but we will have to rerun the main functions to re-estimate the parameters.
+library(DESeq2)
+
+dds <- DESeqDataSetFromTximport(txi, colData, ~ cell_line)
+saveRDS(dds, "dds.RData")
+head(counts(dds))
+
+raw_counts_df <- data.frame(counts(dds))
+
+library(org.Hs.eg.db)
+geneIDs <- substr(rownames(raw_counts_df), 1, 15)
+gene_symbols <- mapIds(org.Hs.eg.db, keys = geneIDs, column = "SYMBOL", keytype = "ENSEMBL", multiVals = "first")
+raw_counts_df$GeneName <- gene_symbols
+raw_counts_df <- raw_counts_df[, c(19, 1:6, 13:18, 7:12)]
+write.csv(raw_counts_df, "raw_counts_allsamples_FGFR3_UTX_UMUC1.csv")
+
+
+#Already, we can take a look at how the samples related to each other. In DESeq2, we have special functions for transforming the counts, so that they can be easily visualized (we will not transform the counts, but use the raw counts later, for statistical testing).
+
+#My favorite of these transformation is the vst, mostly because it is very fast, and provides transformed (nearly log-scale) data which is robust to many problems associated with log-transformed data (for more details, see the DESeq2 workflow or vignette ).
+
+#blind=FALSE refers to the fact that we will use the design in estimating the global scale of biological variability, but not directly in the transformation:
+
+
+vsd <- vst(dds, blind=FALSE)
+
+#Now that we have normalized and transformed the data, it will have roughly the same variance (except for differentially expressed genes) across the range of counts, so from counts in the single digits, up to the most highly expressed genes with very high counts.
+
+#We can make a PCA plot, which shows the distribution of the samples among the top two dimensions, in terms of the variance explained. It's simply a rotation and projection of the transformed data, but picking the "best" 2 dimensions out of the tens of thousands (number of genes).
+library(ggplot2)
+
+plotPCA(vsd, intgroup = c("cell_line"))
+ggsave("allsamples.PCAplot.pdf", device = "pdf")
+
+
+
+#We will chop off the version number of the gene IDs, so that we can better look up their annotation information later.
+#However, we have a few genes which would have duplicated gene IDs after chopping off the version number, so in order to proceed we have to also use make.unique to indicate that some genes are duplicated. (It might be worth looking into why we have multiple versions of genes with the same base ID coming from our annotation.)
+table(duplicated(substr(rownames(dds),1,18)))
+
+rownames(dds) <- make.unique(substr(rownames(dds),1,18))
+
+head(dds)
+
+#Now we can run our differential expression pipeline. First, it is sometimes convenient to remove genes where all the samples have very small counts. It's less of an issue for the statistical methods, and mostly just wasted computation, as it is not possible for these genes to exhibit statistical significance for differential expression. Here we count how many genes (out of those with at least a single count) have 3 samples with a count of 10 or more:
+dds <- dds[rowSums(counts(dds)) > 0,]
+keep <- rowSums(counts(dds) >= 10) >= 3
+table(keep)
+
+dds <- dds[keep,] #filter them out
+
+
+#########
+# get a complete counts table that is normalized to read count so that we can look at specific genes across all samples
+#########
+
+# use this code to take the dds object from deseq and get the normalized counts
+
+dds <- estimateSizeFactors(dds)
+dds_norm <- counts(dds, normalized=TRUE)
+dds_norm_df <- data.frame(dds_norm)
+
+library(org.Hs.eg.db)
+geneIDs <- substr(rownames(dds_norm_df), 1, 15)
+gene_symbols <- mapIds(org.Hs.eg.db, keys = geneIDs, column = "SYMBOL", keytype = "ENSEMBL", multiVals = "first")
+dds_norm_df$GeneName <- gene_symbols
+dds_norm_df <- dds_norm_df[, c(19, 1:6, 13:18, 7:12)]
+
+dds_norm_df[which(dds_norm_df$GeneName == "KRT5"), ]
+
+saveRDS(dds_norm_df, "normalized_counts_allsamples.RData")
+
+write.csv(dds_norm_df, "normalized_counts_allsamples.csv")
+
+
+
+```
+
+
+#DE analysis of all samples vs WTFGFR3_EV
+```{r}
+
+colData_WTFGFR3ref <- colData
+colData_WTFGFR3ref$cell_line <- as.factor(colData_WTFGFR3ref$cell_line)
+colData_WTFGFR3ref$cell_line <- relevel(colData_WTFGFR3ref$cell_line, ref = "WTFGFR3_EV")
+
+library(DESeq2)
+
+dds_WTFGFR3ref <- DESeqDataSetFromTximport(txi, colData_WTFGFR3ref, ~ cell_line)
+dds_WTFGFR3ref
+head(counts(dds_WTFGFR3ref))
+
+table(duplicated(substr(rownames(dds_WTFGFR3ref),1,18)))
+
+rownames(dds_WTFGFR3ref) <- make.unique(substr(rownames(dds_WTFGFR3ref),1,18))
+
+dds_WTFGFR3ref <- dds_WTFGFR3ref[rowSums(counts(dds_WTFGFR3ref)) > 0,]
+keep <- rowSums(counts(dds_WTFGFR3ref) >= 10) >= 3
+table(keep)
+
+dds_WTFGFR3ref <- dds_WTFGFR3ref[keep,] #filter them out
+
+dds_WTFGFR3ref <- DESeq(dds_WTFGFR3ref)
+resultsNames(dds_WTFGFR3ref)
+
+
+#WT FGFR3 UTX vs WT FGFR3 EV
+res_WTFGFR3_UTX_vs_WTFGFR3_EV <- results(dds_WTFGFR3ref, name = "cell_line_WTFGFR3_UTX_vs_WTFGFR3_EV")
+head(res_WTFGFR3_UTX_vs_WTFGFR3_EV)
+
+DESeq2::plotMA(res_WTFGFR3_UTX_vs_WTFGFR3_EV)
+
+# running mapIDs
+# add gene names, the version numbers on end of IDs are not part of data base, so need to trim these off before pulling gene names
+geneIDs <- substr(rownames(res_WTFGFR3_UTX_vs_WTFGFR3_EV), 1, 15)
+library(org.Hs.eg.db)
+gene_symbols <- mapIds(org.Hs.eg.db, keys = geneIDs, column = "SYMBOL", keytype = "ENSEMBL", multiVals = "first")
+
+
+res_WTFGFR3_UTX_vs_WTFGFR3_EV$GeneSymbol <- gene_symbols
+res_WTFGFR3_UTX_vs_WTFGFR3_EV <- na.omit(res_WTFGFR3_UTX_vs_WTFGFR3_EV, cols = GeneSymbol, invert = FALSE )
+res_WTFGFR3_UTX_vs_WTFGFR3_EV[res_WTFGFR3_UTX_vs_WTFGFR3_EV$GeneSymbol == "KDM6A", ]
+
+res_WTFGFR3_UTX_vs_WTFGFR3_EV_sort <- res_WTFGFR3_UTX_vs_WTFGFR3_EV[order(res_WTFGFR3_UTX_vs_WTFGFR3_EV$stat, decreasing = TRUE), ]
+saveRDS(res_WTFGFR3_UTX_vs_WTFGFR3_EV_sort, "resTable_WTFGFR3UTX_vs_WTFGFR3EV.RData")
+
+WTFGFR3_UTX_vs_WTFGFR3_EV_rnk <- res_WTFGFR3_UTX_vs_WTFGFR3_EV_sort[, c(7,4)] %>%
+  as.data.frame()
+WTFGFR3_UTX_vs_WTFGFR3_EV_rnk <- WTFGFR3_UTX_vs_WTFGFR3_EV_rnk[!(WTFGFR3_UTX_vs_WTFGFR3_EV_rnk$GeneSymbol %in% "KDM6A"), ]
+
+res_WTFGFR3_UTX_vs_WTFGFR3_EV_sort <- readRDS("resTable_WTFGFR3UTX_vs_WTFGFR3EV.RData")
+res_WTFGFR3_UTX_vs_WTFGFR3_EV_sort_df <- as.data.frame(res_WTFGFR3_UTX_vs_WTFGFR3_EV_sort)
+res_WTFGFR3_UTX_vs_WTFGFR3_EV_sort_df[grep("SOX", res_WTFGFR3_UTX_vs_WTFGFR3_EV_sort_df$GeneSymbol), ]
+
+#S249EV vs WT FGFR3 EV
+res_S249C_EV_vs_WTFGFR3_EV <- results(dds_WTFGFR3ref, name = "cell_line_S249C_EV_vs_WTFGFR3_EV")
+head(res_S249C_EV_vs_WTFGFR3_EV)
+
+DESeq2::plotMA(res_S249C_EV_vs_WTFGFR3_EV)
+
+# add gene names, the version numbers on end of IDs are not part of data base, so need to trim these off before pulling gene names
+geneIDs <- substr(rownames(res_S249C_EV_vs_WTFGFR3_EV), 1, 15)
+
+res_S249C_EV_vs_WTFGFR3_EV$GeneSymbol <- gene_symbols
+res_S249C_EV_vs_WTFGFR3_EV <- na.omit(res_S249C_EV_vs_WTFGFR3_EV, cols = GeneSymbol, invert = FALSE )
+res_S249C_EV_vs_WTFGFR3_EV[res_S249C_EV_vs_WTFGFR3_EV$GeneSymbol == "KDM6A", ]
+
+res_S249C_EV_vs_WTFGFR3_EV_sort <- res_S249C_EV_vs_WTFGFR3_EV[order(res_S249C_EV_vs_WTFGFR3_EV$stat), ]
+
+res_S249C_EV_vs_WTFGFR3_EV_sort_df <- as.data.frame(res_S249C_EV_vs_WTFGFR3_EV_sort)
+res_S249C_EV_vs_WTFGFR3_EV_sort_df[grep("SOX", res_S249C_EV_vs_WTFGFR3_EV_sort_df$GeneSymbol), ]
+
+saveRDS(res_S249C_EV_vs_WTFGFR3_EV_sort, "resTable_S249EV_vs_WTFGFR3EV.RData")
+
+S249C_EV_vs_WTFGFR3_EV_rnk <- res_S249C_EV_vs_WTFGFR3_EV_sort[, c(7,4)] %>%
+  as.data.frame()
+
+
+# genes that do down
+res_S249C_EV_vs_WTFGFR3_EV_sort_df_down <- dplyr::filter(res_S249C_EV_vs_WTFGFR3_EV_sort_df, padj < 0.05 & log2FoldChange < -1)
+res_S249C_EV_vs_WTFGFR3_EV_sort_genes_down <- res_S249C_EV_vs_WTFGFR3_EV_sort_df_down$GeneSymbol
+
+length(res_S249C_EV_vs_WTFGFR3_EV_sort_genes_down)
+write.table(res_S249C_EV_vs_WTFGFR3_EV_sort_genes_down, 
+            "S249EV_v_WTFGFR3EV_LCF2_downgenes.txt",
+            quote = FALSE,
+            row.names = FALSE,
+            col.names = FALSE
+            )
+
+res_S249C_EV_vs_WTFGFR3_EV_sort_df_down_1.5 <- dplyr::filter(res_S249C_EV_vs_WTFGFR3_EV_sort_df, padj < 0.05 & log2FoldChange < -0.6)
+res_S249C_EV_vs_WTFGFR3_EV_sort_df_down_1.5_genes <- res_S249C_EV_vs_WTFGFR3_EV_sort_df_down_1.5$GeneSymbol
+
+write.table(res_S249C_EV_vs_WTFGFR3_EV_sort_df_down_1.5_genes, 
+            "S249EV_v_WTFGFR3EV_LCF1.5_downgenes.txt",
+            quote = FALSE,
+            row.names = FALSE,
+            col.names = FALSE
+            )
+# all that are signficantly down
+res_S249C_EV_vs_WTFGFR3_EV_sort_df_down_all <- dplyr::filter(res_S249C_EV_vs_WTFGFR3_EV_sort_df, padj < 0.05 & log2FoldChange < -0 )
+res_S249C_EV_vs_WTFGFR3_EV_sort_df_down_all_genes <- res_S249C_EV_vs_WTFGFR3_EV_sort_df_down_all$GeneSymbol
+
+write.table(res_S249C_EV_vs_WTFGFR3_EV_sort_df_down_all_genes, 
+            "S249EV_v_WTFGFR3EV_LCFall_downgenes.txt",
+            quote = FALSE,
+            row.names = FALSE,
+            col.names = FALSE
+            )
+
+# genes that go up
+res_S249C_EV_vs_WTFGFR3_EV_sort_df_up <- dplyr::filter(res_S249C_EV_vs_WTFGFR3_EV_sort_df, padj < 0.05 & log2FoldChange > 1)
+res_S249C_EV_vs_WTFGFR3_EV_sort_genes_up <- res_S249C_EV_vs_WTFGFR3_EV_sort_df_up$GeneSymbol
+
+length(res_S249C_EV_vs_WTFGFR3_EV_sort_genes_up)
+write.table(res_S249C_EV_vs_WTFGFR3_EV_sort_genes_up, 
+            "S249EV_v_WTFGFR3EV_LCF2_upgenes.txt",
+            quote = FALSE,
+            row.names = FALSE,
+            col.names = FALSE
+            )
+
+res_S249C_EV_vs_WTFGFR3_EV_sort_df_up_1.5 <- dplyr::filter(res_S249C_EV_vs_WTFGFR3_EV_sort_df, padj < 0.05 & log2FoldChange > 0.6)
+res_S249C_EV_vs_WTFGFR3_EV_sort_df_up_1.5 <- res_S249C_EV_vs_WTFGFR3_EV_sort_df_up_1.5$GeneSymbol
+
+write.table(res_S249C_EV_vs_WTFGFR3_EV_sort_df_up_1.5, 
+            "S249EV_v_WTFGFR3EV_LCF1.5_upgenes.txt",
+            quote = FALSE,
+            row.names = FALSE,
+            col.names = FALSE
+            )
+
+res_S249C_EV_vs_WTFGFR3_EV_sort_df_up_allP05 <- dplyr::filter(res_S249C_EV_vs_WTFGFR3_EV_sort_df, padj < 0.05 & log2FoldChange > 0)
+res_S249C_EV_vs_WTFGFR3_EV_sort_df_up_allP05 <- res_S249C_EV_vs_WTFGFR3_EV_sort_df_up_allP05$GeneSymbol
+
+write.table(res_S249C_EV_vs_WTFGFR3_EV_sort_df_up_allP05, 
+            "S249EV_v_WTFGFR3EV_allP05_upgenes.txt",
+            quote = FALSE,
+            row.names = FALSE,
+            col.names = FALSE
+            )
+
+
+
+##########
+# look at correlation of genes that change in WTFGFR3 + UTX vs those that change in S249 vs WTGFR3
+corr_table <- merge(S249C_EV_vs_WTFGFR3_EV_rnk, WTFGFR3_UTX_vs_WTFGFR3_EV_rnk, by = 1)
+colnames(corr_table) = c("gene","S249vWTFGFR3", "UTXvsEV_WTFGFR3")
+corr_table[corr_table$gene %in% c("UPK1B", "UPK2", "UPK3B"),]
+
+plot(corr_table$S249vWTFGFR3, corr_table$UTXvsEV_WTFGFR3)
+
+S249alldown_vWT_AllEnh_UTXpeaks_Overlap <- read.table("S249C_dependentGenes_analysis/UTX_enh_overlap_analysis/S249vWTFGFR3/genes_down_with_S249C/down_all_P05/S249alldown_vWT_AllEnh_UTXpeaks_Overlap.txt", stringsAsFactors = F) %>%
+  .[,1]
+
+corr_table$UTXenhPeak_S249down_ov <- ifelse(corr_table$gene %in% S249alldown_vWT_AllEnh_UTXpeaks_Overlap, "UTX_enh", "no_ov")
+
+ggplot(corr_table, aes(x = S249vWTFGFR3, y = UTXvsEV_WTFGFR3, color = UTXenhPeak_S249down_ov)) + geom_point()
+
+#########
+```
+
+#DE analysis of all samples vs 249_EV
+```{r}
+
+colData_S249EVref <- colData
+colData_S249EVref$cell_line <- as.factor(colData_S249EVref$cell_line)
+colData_S249EVref$cell_line <- relevel(colData_S249EVref$cell_line, ref = "S249C_EV")
+
+library(DESeq2)
+
+dds_249ref <- DESeqDataSetFromTximport(txi, colData_S249EVref, ~ cell_line)
+dds_249ref
+head(counts(dds_249ref))
+saveRDS(dds_249ref, "dds_S249EV_as_ref.RData")
+
+table(duplicated(substr(rownames(dds_249ref),1,18)))
+
+rownames(dds_249ref) <- make.unique(substr(rownames(dds_249ref),1,18))
+
+dds_249ref <- dds_249ref[rowSums(counts(dds_249ref)) > 0,]
+keep <- rowSums(counts(dds_249ref) >= 10) >= 3
+table(keep)
+
+dds_249ref <- dds_249ref[keep,] #filter them out
+
+dds_249ref <- DESeq(dds_249ref)
+resultsNames(dds_249ref)
+
+res_S249C_UTX_vs_S249C_EV <- results(dds_249ref, name = "cell_line_S249C_UTX_vs_S249C_EV")
+head(res_S249C_UTX_vs_S249C_EV)
+
+DESeq2::plotMA(res_S249C_UTX_vs_S249C_EV)
+
+# add gene names, the version numbers on end of IDs are not part of data base, so need to trim these off before pulling gene names
+geneIDs <- substr(rownames(res_S249C_UTX_vs_S249C_EV), 1, 15)
+
+# running mapIDs
+library(org.Hs.eg.db)
+gene_symbols <- mapIds(org.Hs.eg.db, keys = geneIDs, column = "SYMBOL", keytype = "ENSEMBL", multiVals = "first")
+
+# S249UTX vs S249EV
+res_S249C_UTX_vs_S249C_EV$GeneSymbol <- gene_symbols
+res_S249C_UTX_vs_S249C_EV <- na.omit(res_S249C_UTX_vs_S249C_EV, cols = GeneSymbol, invert = FALSE )
+res_S249C_UTX_vs_S249C_EV[res_S249C_UTX_vs_S249C_EV$GeneSymbol == "KDM6A", ]
+
+res_S249C_UTX_vs_S249C_EV_sort <- res_S249C_UTX_vs_S249C_EV[order(res_S249C_UTX_vs_S249C_EV$stat, decreasing = TRUE), ]
+saveRDS(res_S249C_UTX_vs_S249C_EV_sort, "resTable_S249UTX_vs_S249EV.RData")
+res_S249C_UTX_vs_S249C_EV_sort <- readRDS("resTable_S249UTX_vs_S249EV.RData")
+res_S249C_UTX_vs_S249C_EV_sort_df <- as.data.frame(res_S249C_UTX_vs_S249C_EV_sort)
+res_S249C_UTX_vs_S249C_EV_sort_df[grep("DUSP", res_S249C_UTX_vs_S249C_EV_sort_df$GeneSymbol), ]
+
+
+
+# make rank list for GSEA
+S249C_UTX_vs_S249C_EV_sort_rnk <- dplyr::select(res_S249C_UTX_vs_S249C_EV_sort_df, GeneSymbol, stat)
+S249C_UTX_vs_S249C_EV_sort_rnk <- dplyr::filter(S249C_UTX_vs_S249C_EV_sort_rnk, !GeneSymbol %in% "KDM6A")
+rownames(S249C_UTX_vs_S249C_EV_sort_rnk) <- NULL
+# write.table(S249C_UTX_vs_S249C_EV_sort_rnk,
+#             "./rnk_lists_for_GSEA/S249C_UTX_vs_S249C_EV_rnk_descending.txt",
+#             quote = FALSE,
+#             row.names = FALSE,
+#             col.names = FALSE)
+
+# filter to those genes that go down in WT vs S249
+res_S249C_UTX_vs_S249C_EV_sort_df_downgenesWT <- dplyr::filter(res_S249C_UTX_vs_S249C_EV_sort_df, GeneSymbol %in% res_S249C_EV_vs_WTFGFR3_EV_sort_genes_down)
+
+# filter to those genes that go down in EV vs S249
+res_S249C_UTX_vs_S249C_EV_sort_df_downgenesEV <- dplyr::filter(res_S249C_UTX_vs_S249C_EV_sort_df, GeneSymbol %in% res_S249C_EV_vs_EV_EV_sort_genes_down)
+
+S249C_UTX_vs_S249C_EV_rnk <- res_S249C_UTX_vs_S249C_EV_sort[, c(7,4)] %>%
+  as.data.frame()
+
+##########
+# look at correlation of genes that change in S249 + UTX vs those that change in S249 vs WTGFR3
+corr_table <- merge(S249C_EV_vs_WTFGFR3_EV_rnk, S249C_UTX_vs_S249C_EV_rnk, by = 1)
+colnames(corr_table) = c("gene","S249vWTFGFR3", "UTXvsEV_S249FGFR3")
+corr_table[corr_table$gene %in% c("UPK1B", "UPK2", "UPK3B"),]
+
+plot(corr_table$S249vWTFGFR3, corr_table$UTXvsEV_S249FGFR3)
+cor(corr_table$S249vWTFGFR3, corr_table$UTXvsEV_S249FGFR3)
+
+S249alldown_vWT_AllEnh_UTXpeaks_Overlap <- read.table("S249C_dependentGenes_analysis/UTX_enh_overlap_analysis/S249vWTFGFR3/genes_down_with_S249C/down_all_P05/S249alldown_vWT_AllEnh_UTXpeaks_Overlap.txt", stringsAsFactors = F) %>%
+  .[,1]
+
+corr_table$UTXenhPeak_S249down_ov <- ifelse(corr_table$gene %in% S249alldown_vWT_AllEnh_UTXpeaks_Overlap, "UTX_enh", "no_ov")
+
+# for (i in 1:nrow(corr_table)){
+#   if ((corr_table[i,1] > 5 | corr_table[i,1] < -5) & (corr_table[i,2] > 5 | corr_table[i,2] < -5)){
+#     corr_table$big_change <- "stat_high"
+#   } else {
+#     corr_table$big_change <- "stat_low"
+#   }
+# }
+library(ggpmisc)
+ggplot(corr_table, aes(x = S249vWTFGFR3, 
+                       y = UTXvsEV_S249FGFR3
+                       )) + 
+  geom_point(color='blue') +
+  geom_smooth(method='lm', formula= y~x, color = "black") +
+  stat_poly_eq(formula = y~x, 
+                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
+                parse = TRUE) 
+
+ggsave("UTXvEV_S249vWTFGFR3_correlate.pdf", useDingbats=FALSE)
+
+#########
+```
+
+
+
+
+

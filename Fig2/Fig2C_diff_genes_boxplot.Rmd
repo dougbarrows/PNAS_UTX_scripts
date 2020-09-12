@@ -1,0 +1,328 @@
+---
+title: "Untitled"
+author: "Doug Barrows"
+date: "11/8/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### DESeq2 analysis for all samples 
+```{r}
+
+
+#The following code (not evaluated here) can be used to generate a table that connects transcripts to genes for summarizing Salmon transcript quantifications for differential gene expression. We simply read in the GTF file from the same database that we used for building the Salmon index (in this case, Gencode version 26), and then pull out a table with the transcript name for every gene.
+
+library(GenomicFeatures)
+
+### next few lines only need to be run if you havent run them before, otherwise, you can just load the database as shown below
+
+# download.file("ftp://ftp.sanger.ac.uk/pub/gencode/Gencode_human/release_27/gencode.v27.annotation.gtf.gz", "gencode.vh27.annotation.gtf.gz")
+# txdb <- makeTxDbFromGFF("gencode.vh27.annotation.gtf.gz")
+# saveDb(txdb, file="gencode.vh27.sqlite")
+# next time you can just load with this line (no need to makeTxDb...)
+txdb <- loadDb("../../gencode.vh27.sqlite") 
+columns(txdb)
+k <- keys(txdb, "GENEID")
+res <- AnnotationDbi::select(txdb, k, "TXNAME", "GENEID") #for every gene, tell me the transcripts that are associated with it
+
+tx2gene <- res[,2:1] #this will show a list that has one column with the transcript name, and another column with the corresponding geneID
+head(tx2gene)
+
+
+samplenames <- list.files("../../salmon_analysis_v0.8.2/quants_for_DESeq/") #this is the directory with my Salmon outputs and I wirte their names into a vector 
+
+samplenames <- samplenames[c(1:6, 13:18, 7:12)]
+
+# differential expression between DMSO and MI503 
+media <- c(rep("full",3), rep("sphere",3), rep("full",3), rep("sphere",3), rep("full",3), rep("sphere",3))
+cell_line <- c(rep("EV", 6), rep("WT_UTX", 6), rep("HEAA_UTX", 6))
+colData <- data.frame(samplenames, media, cell_line)
+
+#We have used the run ID (SRR...) to keep track of the reads and quantifications, so we can build a vector which points to our quantification files using this column of coldata. We use names to name this vector with the run IDs as well.
+files_quant <- file.path("../..//salmon_analysis_v0.8.2/quants_for_DESeq/",colData$samplenames)
+names(files_quant) <- colData$samplenames
+head(files_quant,2)
+
+
+
+library(rjson)
+library(tximport)
+
+
+txi <- tximport(files_quant, type="salmon", tx2gene=tx2gene)
+
+library(DESeq2)
+
+dds <- DESeqDataSetFromTximport(txi, colData, ~ cell_line)
+dds
+head(counts(dds))
+
+vsd <- vst(dds, blind=FALSE)
+
+library(ggplot2)
+
+pcaData <- plotPCA(vsd, intgroup = c("media","cell_line"), returnData=TRUE)
+pcaData$cell_line_media <- paste(all_samples_diffstem_genes$cell_line, all_samples_diffstem_genes$media, sep = "_")
+pcaData$cell_line_media <- factor(pcaData$cell_line_media, levels = c("EV_full", "WT_UTX_full", "HEAA_UTX_full", "EV_sphere", "WT_UTX_sphere", "HEAA_UTX_sphere"))
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggplot(pcaData, aes(PC1, PC2, color=cell_line_media)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) + 
+  coord_fixed() + 
+  theme_bw() + 
+  scale_color_manual(values=c("#99CCFF", "#0066CC", "#0066CC", "#FF9999", "#990000", "#990000")) 
+ggsave("allsamples.PCAplot.pdf", device = "pdf", useDingbats = FALSE, height = 6, width = 5)
+
+
+
+#We will chop off the version number of the gene IDs, so that we can better look up their annotation information later.
+table(duplicated(substr(rownames(dds),1,18)))
+
+rownames(dds) <- make.unique(substr(rownames(dds),1,18))
+
+head(dds)
+
+#Here we count how many genes (out of those with at least a single count) have 3 samples with a count of 10 or more:
+dds <- dds[rowSums(counts(dds)) > 0,]
+keep <- rowSums(counts(dds) >= 10) >= 3
+table(keep)
+
+dds <- dds[keep,] #filter them out
+
+#########
+# get a complete counts table that is normalized to read count so that we can look at specific genes across all samples
+#########
+
+# use this code to take the dds object from deseq and get the normalized counts
+
+dds <- estimateSizeFactors(dds)
+dds_norm <- counts(dds, normalized=TRUE)
+dds_norm_df <- data.frame(dds_norm)
+
+library(org.Hs.eg.db)
+geneIDs <- substr(rownames(dds_norm_df), 1, 15)
+gene_symbols <- mapIds(org.Hs.eg.db, keys = geneIDs, column = "SYMBOL", keytype = "ENSEMBL", multiVals = "first")
+dds_norm_df$GeneName <- gene_symbols
+dds_norm_df <- dds_norm_df[, c(19, 1:18)]
+write.table(dds_norm_df, "normalized_counts_table_allSamples.csv", sep = ",")
+```
+
+
+```{r}
+##########
+# STEM and Differentiation Genes
+##########
+
+options(scipen=999)
+dds_norm_df <- read.delim("normalized_counts_table_allSamples.csv", sep = ",")
+all_samples_counts_norm <- dds_norm_df
+all_samples_counts_norm <- all_samples_counts_norm[!duplicated(all_samples_counts_norm$GeneName),]
+all_samples_counts_norm <- na.omit(all_samples_counts_norm)
+rownames(all_samples_counts_norm) <- all_samples_counts_norm[,1]
+all_samples_counts_norm <- all_samples_counts_norm[,-1]
+all_samples_counts_norm_trans <- as.data.frame(t(all_samples_counts_norm))
+
+media <- c(rep("full",3), rep("sphere",3), rep("full",3), rep("sphere",3), rep("full",3), rep("sphere",3))
+cell_line <- c(rep("EV", 6), rep("WT_UTX", 6), rep("HEAA_UTX", 6))
+all_samples_counts_norm_trans$media <- media
+all_samples_counts_norm_trans$cell_line <- cell_line
+
+all_samples_counts_norm_trans <- all_samples_counts_norm_trans[, c(15474, 15475, 1:15473)]
+
+#NOTE: removed UPK1A and KRT20 becuase of low expression (Average is less than 100 reads)
+stem_genes <- c("CD44", "TP63", "KRT17", "KRT6A", "KRT6B", "KRT6C", "KRT5")
+differentiation_genes <- c( "UPK1B", "UPK2","UPK3A", "UPK3B", "KRT8", "KRT18")
+
+all_samples_diffstem_genes <- all_samples_counts_norm_trans[ , colnames(all_samples_counts_norm_trans) %in% stem_genes | colnames(all_samples_counts_norm_trans) %in% differentiation_genes | colnames(all_samples_counts_norm_trans) == "media" | colnames(all_samples_counts_norm_trans) == "cell_line"]
+
+all_samples_diffstem_genes_mat <- all_samples_diffstem_genes[, 3:14] %>%
+  as.matrix()
+all_samples_diffstem_genes_mat_z <- scale(all_samples_diffstem_genes_mat) %>%
+  as.data.frame()
+
+all_samples_diffstem_genes_z <- cbind(all_samples_diffstem_genes[1:2], all_samples_diffstem_genes_mat_z)
+
+library(Rmisc)
+library(dplyr)
+library(tidyr)
+
+
+# DO STATS FOR UPK GENES IN SPHERE CELLS
+
+# UPK1B
+UPK1B_WT_v_EV_sphere <- t.test(x = all_samples_diffstem_genes[grepl("EV_sphere", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK1B"],
+                               y = all_samples_diffstem_genes[grepl("WT_sphere", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK1B"],
+                               var.equal = TRUE)
+UPK1B_WT_v_EV_sphere$p.value
+
+UPK1B_HA_v_EV_sphere <- t.test(x = all_samples_diffstem_genes[grepl("EV_sphere", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK1B"],
+                               y = all_samples_diffstem_genes[grepl("HA_sphere", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK1B"],
+                               var.equal = TRUE)
+UPK1B_WT_v_EV_sphere$p.value
+
+#UPK2
+UPK2_WT_v_EV_sphere <- t.test(x = all_samples_diffstem_genes[grepl("EV_sphere", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK2"],
+                               y = all_samples_diffstem_genes[grepl("WT_sphere", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK2"],
+                               var.equal = TRUE)
+UPK2_WT_v_EV_sphere$p.value
+
+UPK2_HA_v_EV_sphere <- t.test(x = all_samples_diffstem_genes[grepl("EV_sphere", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK2"],
+                               y = all_samples_diffstem_genes[grepl("HA_sphere", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK2"],
+                               var.equal = TRUE)
+UPK2_WT_v_EV_sphere$p.value
+
+#UPK3B
+UPK3B_WT_v_EV_sphere <- t.test(x = all_samples_diffstem_genes[grepl("EV_sphere", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK3B"],
+                               y = all_samples_diffstem_genes[grepl("WT_sphere", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK3B"],
+                               var.equal = TRUE)
+UPK3B_WT_v_EV_sphere$p.value
+
+UPK3B_HA_v_EV_sphere <- t.test(x = all_samples_diffstem_genes[grepl("EV_sphere", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK3B"],
+                               y = all_samples_diffstem_genes[grepl("HA_sphere", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK3B"],
+                               var.equal = TRUE)
+UPK3B_WT_v_EV_sphere$p.value
+
+writeLines(con = "UPKs_pvalues_WT_HA_vs_EV_sphere.txt",
+           text = c(capture.output(UPK1B_WT_v_EV_sphere),
+                    capture.output(UPK1B_HA_v_EV_sphere),
+                    capture.output(UPK2_WT_v_EV_sphere),
+                    capture.output(UPK2_HA_v_EV_sphere),
+                    capture.output(UPK3B_WT_v_EV_sphere),
+                    capture.output(UPK3B_HA_v_EV_sphere)))
+
+# DO STATS FOR UPK GENES IN FULL CELLS
+
+# UPK1B
+UPK1B_WT_v_EV_full <- t.test(x = all_samples_diffstem_genes[grepl("EV_full", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK1B"],
+                               y = all_samples_diffstem_genes[grepl("WT_full", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK1B"],
+                               var.equal = TRUE)
+UPK1B_WT_v_EV_full$p.value
+
+UPK1B_HA_v_EV_full <- t.test(x = all_samples_diffstem_genes[grepl("EV_full", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK1B"],
+                               y = all_samples_diffstem_genes[grepl("HA_full", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK1B"],
+                               var.equal = TRUE)
+UPK1B_WT_v_EV_full$p.value
+
+#UPK2
+UPK2_WT_v_EV_full <- t.test(x = all_samples_diffstem_genes[grepl("EV_full", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK2"],
+                               y = all_samples_diffstem_genes[grepl("WT_full", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK2"],
+                               var.equal = TRUE)
+UPK2_WT_v_EV_full$p.value
+
+UPK2_HA_v_EV_full <- t.test(x = all_samples_diffstem_genes[grepl("EV_full", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK2"],
+                               y = all_samples_diffstem_genes[grepl("HA_full", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK2"],
+                               var.equal = TRUE)
+UPK2_WT_v_EV_full$p.value
+
+#UPK3B
+UPK3B_WT_v_EV_full <- t.test(x = all_samples_diffstem_genes[grepl("EV_full", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK3B"],
+                               y = all_samples_diffstem_genes[grepl("WT_full", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK3B"],
+                               var.equal = TRUE)
+UPK3B_WT_v_EV_full$p.value
+
+UPK3B_HA_v_EV_full <- t.test(x = all_samples_diffstem_genes[grepl("EV_full", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK3B"],
+                               y = all_samples_diffstem_genes[grepl("HA_full", rownames(all_samples_diffstem_genes)), 
+                                                              colnames(all_samples_diffstem_genes) == "UPK3B"],
+                               var.equal = TRUE)
+UPK3B_WT_v_EV_full$p.value
+
+writeLines(con = "UPKs_pvalues_WT_HA_vs_EV_full.txt",
+           text = c(capture.output(UPK1B_WT_v_EV_full),
+                    capture.output(UPK1B_HA_v_EV_full),
+                    capture.output(UPK2_WT_v_EV_full),
+                    capture.output(UPK2_HA_v_EV_full),
+                    capture.output(UPK3B_WT_v_EV_full),
+                    capture.output(UPK3B_HA_v_EV_full)))
+
+# MAKE PLOTS
+
+
+###### just EV_full and all sphere
+
+all_samples_diffstem_genes$cell_line_media <- paste(all_samples_diffstem_genes$cell_line, all_samples_diffstem_genes$media, sep = "_")
+all_samples_diffstem_genes_gather <- all_samples_diffstem_genes %>% gather(key = "Gene_Name", value = "Expression", CD44:UPK3B)
+sum_error <- summarySE(all_samples_diffstem_genes_gather, measurevar="Expression", groupvars=c("cell_line_media", "Gene_Name"), na.rm = FALSE)
+sum_error_EVfull_allsphere <- sum_error[grepl("EV|sphere", sum_error$cell_line_media) ,]
+
+sum_error_EVfull_allsphere$Gene_Name <- factor(sum_error_EVfull_allsphere$Gene_Name, levels = c("CD44", "TP63", "KRT17", "KRT5", "KRT6A", "KRT6B", "KRT6C", "UPK1B", "UPK2", "UPK3B","UPK3A", "KRT8", "KRT18"))
+sum_error_EVfull_allsphere$cell_line_media <- factor(sum_error_EVfull_allsphere$cell_line_media, levels = c("EV_full", "EV_sphere", "WT_UTX_sphere", "HEAA_UTX_sphere"))
+
+sum_error_EVfull_allsphere_stem <- sum_error_EVfull_allsphere[sum_error_EVfull_allsphere$Gene_Name %in% c("CD44", "TP63", "KRT17","KRT5", "KRT6A", "KRT6B", "KRT6C"),]
+sum_error_EVfull_allsphere_stem$cell_line_media <- factor(sum_error_EVfull_allsphere_stem$cell_line_media, levels = c("EV_full", "EV_sphere", "WT_UTX_sphere", "HEAA_UTX_sphere"))
+sum_error_EVfull_allsphere_diff <- sum_error_EVfull_allsphere[sum_error_EVfull_allsphere$Gene_Name %in% c("UPK1B", "UPK2", "UPK3B", "UPK3A", "KRT8", "KRT18"),]
+sum_error_EVfull_allsphere_diff$cell_line_media <- factor(sum_error_EVfull_allsphere_diff$cell_line_media, levels = c("EV_full", "EV_sphere", "WT_UTX_sphere", "HEAA_UTX_sphere"))
+
+library(ggplot2)
+
+ggplot(data = sum_error_EVfull_allsphere, mapping = aes(x = cell_line_media, y = Expression, fill = cell_line_media)) + geom_bar( stat = "identity", position = "dodge") + geom_errorbar(aes(ymin = Expression - se, ymax = Expression + se), position = "dodge") + facet_wrap(~Gene_Name, scales = "free") + theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank(), strip.text = element_text(face="bold", size=12))
+
+ggplot(data = sum_error_EVfull_allsphere_stem, mapping = aes(x = cell_line_media, y = Expression, fill = cell_line_media)) + geom_bar( stat = "identity", position = "dodge") + geom_errorbar(aes(ymin = Expression - se, ymax = Expression + se), position = "dodge") + facet_wrap(~Gene_Name, scales = "free") + theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank())
+
+ggplot(data = sum_error_EVfull_allsphere_diff, mapping = aes(x = cell_line_media, y = Expression, fill = cell_line_media)) + 
+  geom_bar( stat = "identity", position = "dodge") + 
+  geom_errorbar(aes(ymin = Expression - se, ymax = Expression + se), position = "dodge") + facet_wrap(~Gene_Name, scales = "free", nrow = 2) + 
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank()) + 
+  scale_fill_manual(values=c("#99CCFF", "#FF9999", "#990000", "#990000"))
+ggsave("diff_genes_boxplot_EVfull_allsphere.pdf", device = "pdf", height = 5, width = 8)
+
+
+##### all full and sphere samples
+
+all_samples_diffstem_genes$cell_line_media <- paste(all_samples_diffstem_genes$cell_line, all_samples_diffstem_genes$media, sep = "_")
+all_samples_diffstem_genes_gather <- all_samples_diffstem_genes %>% gather(key = "Gene_Name", value = "Expression", CD44:UPK3B)
+sum_error_allsamples <- summarySE(all_samples_diffstem_genes_gather, measurevar="Expression", groupvars=c("cell_line_media", "Gene_Name"), na.rm = FALSE)
+
+sum_error_allsamples$Gene_Name <- factor(sum_error_allsamples$Gene_Name, levels = c("CD44", "TP63", "KRT17", "KRT5", "KRT6A", "KRT6B", "KRT6C", "UPK1B", "UPK2", "UPK3B","UPK3A", "KRT8", "KRT18"))
+sum_error_allsamples$cell_line_media <- factor(sum_error_allsamples$cell_line_media, levels = c("EV_full", "WT_UTX_full", "HEAA_UTX_full", "EV_sphere", "WT_UTX_sphere", "HEAA_UTX_sphere"))
+
+sum_error_allsamples_stem <- sum_error_allsamples[sum_error_allsamples$Gene_Name %in% c("CD44", "TP63", "KRT17","KRT5", "KRT6A", "KRT6B", "KRT6C"),]
+sum_error_allsamples_stem$cell_line_media <- factor(sum_error_allsamples_stem$cell_line_media, levels = c("EV_full", "WT_UTX_full", "HEAA_UTX_full", "EV_sphere", "WT_UTX_sphere", "HEAA_UTX_sphere"))
+sum_error_allsamples_diff <- sum_error_allsamples[sum_error_allsamples$Gene_Name %in% c("UPK1B", "UPK2", "UPK3B", "UPK3A", "KRT8", "KRT18"),]
+sum_error_allsamples_diff$cell_line_media <- factor(sum_error_allsamples_diff$cell_line_media, levels = c("EV_full", "WT_UTX_full", "HEAA_UTX_full", "EV_sphere", "WT_UTX_sphere", "HEAA_UTX_sphere"))
+
+library(ggplot2)
+
+ggplot(data = sum_error_allsamples, mapping = aes(x = cell_line_media, y = Expression, fill = cell_line_media)) + geom_bar( stat = "identity", position = "dodge") + geom_errorbar(aes(ymin = Expression - se, ymax = Expression + se), position = "dodge") + facet_wrap(~Gene_Name, scales = "free") + theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank(), strip.text = element_text(face="bold", size=12))
+
+ggplot(data = sum_error_allsamples_stem, mapping = aes(x = cell_line_media, y = Expression, fill = cell_line_media)) + geom_bar( stat = "identity", position = "dodge") + geom_errorbar(aes(ymin = Expression - se, ymax = Expression + se), position = "dodge") + facet_wrap(~Gene_Name, scales = "free") + theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank())
+
+ggplot(data = sum_error_allsamples_diff, mapping = aes(x = cell_line_media, y = Expression, fill = cell_line_media)) + 
+  geom_bar( stat = "identity", position = "dodge") + 
+  geom_errorbar(aes(ymin = Expression - se, ymax = Expression + se), position = "dodge") + 
+  facet_wrap(~Gene_Name, scales = "free", nrow = 2) + 
+  theme_bw() + 
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank()) + 
+  scale_fill_manual(values=c("#99CCFF", "#0066CC", "#0066CC", "#FF9999", "#990000", "#990000")) + 
+  scale_y_continuous(expand = expand_scale(mult = c(0, .2)))
+ggsave("diff_genes_boxplot_allsamples.pdf", device = "pdf", height = 5, width = 8)
+
+
+```
+

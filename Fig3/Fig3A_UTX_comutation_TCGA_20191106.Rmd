@@ -1,0 +1,76 @@
+---
+title: "Untitled"
+author: "Doug Barrows"
+date: "11/6/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyr)
+library(stringr)
+co_muts <- read.delim("UTX_comutation_TCGA_20191106_table.tsv", sep = "\t")
+dim(co_muts)
+
+
+co_muts <- separate(co_muts, Altered.group, into = c("Altered_num", "Altered_perc"), sep = " ")
+co_muts <- separate(co_muts, Unaltered.group, into = c("Unaltered_num", "Unaltered_perc"), sep = " ")
+head(co_muts)
+
+co_muts$Altered_perc <- str_extract(co_muts$Altered_perc, "\\d+\\.*\\d*") %>% as.numeric()
+co_muts$Unaltered_perc <- str_extract(co_muts$Unaltered_perc, "\\d+\\.*\\d*") %>% as.numeric()
+
+co_muts$total_muts <- as.numeric(co_muts$Altered_num) + as.numeric(co_muts$Unaltered_num)
+co_muts$total_muts_perc <- co_muts$total_muts/412
+
+co_muts$total_muts_perc_FGF_PIK3CA <- ifelse(co_muts$Gene %in% c("FGFR3", "PIK3CA"), TRUE, FALSE)
+
+library(ggplot2)
+
+ggplot(co_muts, aes(x = Altered_perc, y = Unaltered_perc, color = total_muts_perc_FGF_PIK3CA)) + 
+  geom_point(size = 2) + 
+  geom_text(aes(label=ifelse(co_muts$Gene %in% c("FGFR3", "PIK3CA"), as.character(paste0(Gene, " (p=", p.Value, ")")),'')),hjust=0,vjust=-0.5) + 
+  scale_color_manual(values=c("#999999", "red")) + 
+  geom_abline(intercept = 0, slope = 1, color = "black", linetype="dashed") + 
+  theme_bw() + 
+  theme(legend.position = "none",
+        axis.title=element_text(size=14))+ 
+  xlab("Mutation Rate in UTX Mutant Tumors") + 
+  ylab("Mutation Rate in UTX WT Tumors") 
+ggsave("KDM6A_coMuts_ateredVSunaltered_bw.pdf", height = 5, width = 5, useDingbats=FALSE)
+
+co_muts_filter <- co_muts[co_muts$total_muts_perc > 0.01, ]
+dim(co_muts_filter)
+#write.table(co_muts_sub_1filter, 'UTX_co_mutations_1perc_filter.csv', sep = ",", row.names = FALSE)
+
+
+ggplot(co_muts_filter, aes(x = Altered_perc, y = Unaltered_perc, color = total_muts_perc_FGF_PIK3CA)) + 
+  geom_point(size = 2) + 
+  geom_text(aes(label=ifelse(co_muts_filter$Gene %in% c("FGFR3", "PIK3CA"), as.character(paste0(Gene, " (p=", p.Value, ")")),'')),hjust=0,vjust=-0.5) + 
+  scale_color_manual(values=c("#999999", "red")) + 
+  geom_abline(intercept = 0, slope = 1, color = "black", linetype="dashed") + 
+  theme_classic() + 
+  theme(legend.position = "none",
+        axis.title=element_text(size=14))+ 
+  xlab("Mutation Rate in UTX Mutant Tumors") + 
+  ylab("Mutation Rate in UTX WT Tumors")
+ggsave("KDM6A_coMuts_ateredVSunaltered_classic_filter1.pdf", height = 5, width = 5, useDingbats=FALSE)
+
+co_muts_sub <- co_muts[,c(1,4,6,8,9,10,11, 12, 13)]
+colnames(co_muts_sub)[2:3] <- c("PercMut_UTXWT_tumors", "PercMut_UTXmut_tumors")
+
+co_muts_sub_5filter <- co_muts_sub[co_muts_sub$total_muts_perc > 0.05, ]
+dim(co_muts_sub_5filter)
+write.table(co_muts_sub_5filter, 'UTX_co_mutations_5perc_filter.csv', sep = ",", row.names = FALSE)
+
+co_muts_sub_3filter <- co_muts_sub[co_muts_sub$total_muts_perc > 0.03, ]
+dim(co_muts_sub_3filter)
+write.table(co_muts_sub_3filter, 'UTX_co_mutations_3perc_filter.csv', sep = ",", row.names = FALSE)
+
+
+
+```
+

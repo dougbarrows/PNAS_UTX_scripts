@@ -1,0 +1,300 @@
+---
+title: "heatmaps"
+author: "Doug Barrows"
+date: "April 4, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(DESeq2)
+###### we will define our gene set by those genes that change in FGFR3 mutant tumors, without considering UTX status
+dds <- readRDS("../../../../20181008_FGFR3AMP_vs_mut_lumpap/FGFR3_AMPvMUT_lumpap/FGFR3_AMPvMUT_lumpap_2_dds.RData")
+resultsNames(dds)
+dds <- estimateSizeFactors(dds)
+counts <- as.data.frame(counts(dds, normalized=TRUE))
+#head(counts)
+
+# now we have our list of genes that we are interested in, we have to labels all of the patietns based on the mutation status of all the proteins we will use in the heatmap
+
+patient_list_path <- "../../../../alterations_across_samplesFGFR3_UTX_MLL3_4__alltumors.tsv"
+genes <-  c("KDM6A", "KMT2C", "KMT2D", "FGFR3")
+
+# this information on the patiens with these particular mutations was downloaded from cBIO portal
+patients <- read.delim(patient_list_path)
+
+# change the column names to only be the gene name and not the long name it is given in TCGA table
+colnames(patients)[5:ncol(patients)] <- gsub("\\..*","",colnames(patients)[5:ncol(patients)])
+
+#extract all rows for patients that have mutations in each protein (only those with mutation of homDEL, so excluding the amplifications as there were only a few and I am intersted in loss of these proteins' function)
+
+
+patients_truncate_splice_homdel <- vector("list", length = length(genes))
+for (i in seq_along(genes)) {
+  names(patients_truncate_splice_homdel)[i] <- genes[i] 
+  patients_truncate_splice_homdel[[i]] <- patients[grepl("\\*|HOMDEL|splice", patients[,colnames(patients) == genes[i]]),]
+}
+
+patients_missense <- vector("list", length = length(genes))
+for (i in seq_along(genes)) {
+  names(patients_missense)[i] <- genes[i] 
+  patients_missense[[i]] <- patients[grepl("MUT", patients[,colnames(patients) == genes[i]]),]
+  patients_missense[[i]] <- patients_missense[[i]][!(patients_missense[[i]]$Sample.ID %in% patients_truncate_splice_homdel[[i]]$Sample.ID), ]
+}
+
+# get just the patient list for tuncating and missense
+
+patient_list_truncate_splice_homdel <- vector("list", length = length(patients_truncate_splice_homdel))
+for (i in seq_along(patients_truncate_splice_homdel)){
+  patient_list_truncate_splice_homdel[[i]] <- as.character(patients_truncate_splice_homdel[[i]]$Sample.ID)
+}
+names(patient_list_truncate_splice_homdel) <- names(patients_truncate_splice_homdel)
+
+patient_list_missense <- vector("list", length = length(patients_missense))
+for (i in seq_along(patients_missense)){
+  patient_list_missense[[i]] <- as.character(patients_missense[[i]]$Sample.ID)
+}
+names(patient_list_missense) <- names(patients_missense)
+
+
+# DESeq2 analysis
+
+# read in RNA seq data
+
+#print("Reading in counts table...")
+#counts <- read.delim(counts_table_path)
+#counts$Hugo_Symbol <- make.unique(as.character(counts$Hugo_Symbol), sep = "_")
+#counts <- na.omit(counts)
+#row.names(counts) <- counts$Hugo_Symbol
+#counts <- counts[c(-1,-2)]
+
+counts[1:ncol(counts)] <- lapply(counts[1:ncol(counts)], as.integer)
+
+library(stringr)
+colnames(counts) <- str_replace_all(colnames(counts), "\\.", "-")
+
+# generally not all paitents that had RNA seq had a full mutational profile, so need to filter the full list from RNA seq table so it only contains patients with full mutational profile
+
+counts <- counts[ , colnames(counts) %in% patients$Sample.ID]
+
+
+library(dplyr)
+meta_data <- read.csv("../../../../../../../metadata.csv", header = TRUE, stringsAsFactors = FALSE)
+
+all_lumpap_tumors <- filter(meta_data, (mRNA.cluster == "Luminal_papillary")) %>% dplyr::select(Case.ID)
+counts <- counts[ , substr(colnames(counts), 1, 12) %in% all_lumpap_tumors$Case.ID]
+
+#need to 1 to all values in order to do the log2 transformation
+#counts_heat <- counts + 1
+#counts_heat <- log2(counts_heat)
+
+
+truncate_splice_homdel_label <- vector("list", length = length(patient_list_truncate_splice_homdel))
+for (i in seq_along(patient_list_truncate_splice_homdel)) {
+  truncate_splice_homdel_label[[i]] <- colnames(counts) %in% patient_list_truncate_splice_homdel[[i]]
+}
+names(truncate_splice_homdel_label) <- names(patient_list_truncate_splice_homdel)
+
+missense_label <- vector("list", length = length(patient_list_missense))
+for (i in seq_along(patient_list_missense)) {
+  missense_label[[i]] <- colnames(counts) %in% patient_list_missense[[i]]
+}
+names(missense_label) <- names(patient_list_missense)
+
+# label all the indexes of the patients with either WT, TSD (truncate_splice_delete), or mis (missense)
+mutant_label <- vector("list", length = length(truncate_splice_homdel_label))
+for (i in seq_along(truncate_splice_homdel_label)) {
+  for (x in seq_along(truncate_splice_homdel_label[[i]])) {
+    if (truncate_splice_homdel_label[[i]][x] == "TRUE") {
+    mutant_label[[i]][x] <- paste0(names(truncate_splice_homdel_label[i]), "tsd")
+    }
+    else if (missense_label[[i]][x] == "TRUE") {
+    mutant_label[[i]][x] <- paste0(names(truncate_splice_homdel_label[i]), "mis") # its okay this is the TSD names label, they have same names
+    }
+    else {
+    mutant_label[[i]][x] <- paste0(names(truncate_splice_homdel_label[i]), "wt")
+    }
+  }
+}
+names(mutant_label) <- names(truncate_splice_homdel_label)
+# this should match up with the numbers of alterations above for each gene
+
+lapply(mutant_label, table)
+
+# make one vector that combines all the genotypes
+genes_label <- vector(mode = "character", length = length(mutant_label[[1]]))
+for (i in seq_along(mutant_label)) {
+  if(i == 1) {
+    for (x in seq_along(mutant_label[[1]])) {
+     genes_label[x] <- paste(mutant_label[[i]][x], sep = "_")
+    }
+  }
+  else {
+    for (x in seq_along(mutant_label[[1]])) {
+     genes_label[x] <- paste(genes_label[x], mutant_label[[i]][x], sep = "_")
+    
+    }
+  }
+}
+
+genotype <- factor(genes_label)
+sample_names <- colnames(counts)
+
+
+colData <- data.frame(sample_names, genotype)
+colData <- na.omit(colData)
+table(colData$genotype)
+
+# this for loop simply will make a string that matches the "wt" case for each gene to set the reference level
+
+for (i in seq_along(genes)) {
+  if (i == 1) {
+    ref_level <- ""
+  }
+  ifelse (i == length(genes), ref_level <- paste0(ref_level, genes[i], "wt"), ref_level <- paste0(ref_level, genes[i], "wt_"))
+}
+colData$genotype <- relevel(colData$genotype, ref = ref_level)
+levels(colData$genotype)
+
+######### important
+# this will add a column to colData that indicates if the sample has UTX TSD OR MLL3/4 double TSD 
+
+colData$UTX_MLLdble <- NA
+for (i in seq_along(colData$genotype)) {
+if (grepl("KDM6Atsd|KMT2Ctsd_KMT2Dtsd", colData$genotype[i])) {
+  colData$UTX_MLLdble[i] <- "UTX_MLLdble_tsd"
+}
+else if (grepl("KDM6Awt_KMT2Cwt_KMT2Dwt", colData$genotype[i])){
+  colData$UTX_MLLdble[i] <- "wt"
+}
+  else{
+    colData$UTX_MLLdble[i] <- "UTX_MLL_mis_singlemuts"
+  }
+}
+
+######### important
+# this will add a column to colData that indicates if the sample has UTX TSD 
+
+colData$UTX <- NA
+for (i in seq_along(colData$genotype)) {
+if (grepl("KDM6Atsd", colData$genotype[i])) {
+  colData$UTX[i] <- "KDM6Atsd"
+}
+else if (grepl("KDM6Awt", colData$genotype[i])){
+  colData$UTX[i] <- "KDM6Awt"
+}
+  else{
+    colData$UTX[i] <- "KDM6Amis"
+  }
+}
+
+######### important
+# this will add a column to colData that indicates if the sample has any MLLmutation 
+
+colData$MLLmut <- NA
+for (i in seq_along(colData$genotype)) {
+if (grepl("KMT2Cwt_KMT2Dwt", colData$genotype[i])) {
+  colData$MLLmut[i] <- "MLLwt"
+}
+else {
+  colData$MLLmut[i] <- "MLLmut"
+}
+  
+}
+
+######### important
+# this will add a column to colData that indicates if the sample has FGFR3 missense mutation 
+
+colData$FGFR3mis <- NA
+for (i in seq_along(colData$genotype)) {
+if (grepl("FGFR3mis", colData$genotype[i])) {
+  colData$FGFR3mis[i] <- "FGFR3mis"
+}
+  else{
+    colData$FGFR3mis[i] <- "NOT_FGFR3mis"
+  }
+}
+
+colData$FGFR3mis <- relevel(as.factor(colData$FGFR3mis), ref = "NOT_FGFR3mis")
+levels(colData$FGFR3mis)
+
+# this will combine the FGFR3 and UTX_MLLdblemut columns into one so that I can run DESeq2 on both conditions
+colData$combined <- as.factor(paste(colData$UTX_MLLdble, colData$FGFR3mis, sep = "_"))
+colData$combined <- relevel(colData$combined, ref = "wt_NOT_FGFR3mis")
+levels(colData$combined)
+table(colData$combined)
+
+
+#####
+# bar graphs with error bars (standard error)
+
+counts_mat <- as.matrix(counts)
+counts_mat_t <- t(counts_mat)
+counts_df_t <- as.data.frame(counts_mat_t)
+
+###### for UTX and MLL double (UTX alone with MLLwt is below)
+
+# should be the same, but make sure the counts rownames and colData patient order is the same so you can just add the genotypes to this table
+counts_df_t <- counts_df_t[order(match(rownames(counts_df_t), colData$sample_names)), ]
+counts_df_t$genotype <- colData$combined
+table(counts_df_t$genotype )
+
+
+######### UTX alone with MLLwt 
+
+colData_MLLwtonly <- colData[colData$MLLmut == "MLLwt",]
+
+colData_MLLwtonly$genotype <- paste(colData_MLLwtonly$UTX, colData_MLLwtonly$FGFR3mis, sep = "_")
+colData_MLLwtonly_sub <- data.frame(sample_names = colData_MLLwtonly$sample_names, genotype = colData_MLLwtonly$genotype)
+
+counts_df_t_noMLL <- counts_df_t[rownames(counts_df_t) %in% colData_MLLwtonly$sample_names,]
+
+library(tibble)
+counts_df_t_noMLL <- merge(counts_df_t_noMLL, colData_MLLwtonly_sub, by.x = 0, by.y = 1)
+counts_df_t_noMLL <- column_to_rownames(counts_df_t_noMLL, var = "Row.names")
+library(tidyr)
+counts_df_t_noMLL_plot <- gather(counts_df_t_noMLL, key = gene, value = expression, c(-17828))
+
+#dont really care about single muts + FGFR3 mut and figures should match box plots, so will get rid of this
+counts_df_t_noMLL_plot <- counts_df_t_noMLL_plot[!(grepl("KDM6Amis", counts_df_t_noMLL_plot$genotype)),]
+levels <-c("KDM6Awt_NOT_FGFR3mis","KDM6Atsd_NOT_FGFR3mis","KDM6Awt_FGFR3mis","KDM6Atsd_FGFR3mis")
+counts_df_t_noMLL_plot$genotype <- ordered(counts_df_t_noMLL_plot$genotype , levels = c(levels))
+counts_df_t_noMLL_plot$expression <- as.numeric(counts_df_t_noMLL_plot$expression)
+
+# 'summ' is same name as above, so make sure you run this section (the 'noMLL' section') first
+library(Rmisc)
+summ <- summarySE(counts_df_t_noMLL_plot, measurevar="expression", groupvars=c("genotype","gene"))
+
+library(ggplot2)
+# differentitaiton genes
+summ_diff <- summ[summ$gene %in% c("UPK1A", "UPK1B", "UPK2","UPK3A", "UPK3B", "KRT18", "KRT20"), ]
+ggplot(summ_diff, aes(x = genotype, y = expression, fill = genotype)) + geom_bar(position = "dodge", stat = "summary", fun.y = "mean") + facet_wrap(~gene, scales = "free_y", nrow=3)  + geom_errorbar(aes(ymin=expression-se, ymax=expression +se))
+#ggsave("./UTXalone_noMLL/diffgenes_lumpap_FGFR3_UTX_MLL_genotypes_withKRT18_KRT20.pdf", device = "pdf", width = 7.5, height = 7)
+
+
+# stem cell genes
+summ_stem <- summ[summ$gene %in% c("CD44", "TP63", "KRT17", "KRT5", "KRT6A", "KRT6B", "KRT6C"), ]
+ggplot(summ_stem, aes(x = genotype, y = expression, fill = genotype)) + geom_bar(position = "dodge", stat = "summary", fun.y = "mean") + facet_wrap(~gene, scales = "free_y", nrow=3) + geom_errorbar(aes(ymin=expression-se, ymax=expression +se))
+#ggsave("./UTXalone_noMLL/stemgenes_lumpap_FGFR3_UTX_noMLL_genotypes.pdf", device = "pdf",  width = 7.5, height = 7)
+
+# select diff and stem for paper figue
+
+summ_papergenes <- summ[summ$gene %in% c("KRT20", "UPK1A", "UPK2","UPK3A", "CD44", "TP63", "KRT17", "KRT5", "KRT6A", "KRT6B"), ]
+summ_papergenes$gene <- ordered(summ_papergenes$gene, levels = c("KRT20", "UPK1A", "UPK2","UPK3A", "CD44", "TP63", "KRT17", "KRT5", "KRT6A", "KRT6B"))
+ggplot(summ_papergenes, aes(x = genotype, y = expression, fill = genotype)) + 
+  geom_bar(position = "dodge", stat = "summary", fun.y = "mean") + 
+  facet_wrap(~gene, scales = "free_y", nrow=3) + 
+  geom_errorbar(aes(ymin=expression-se, ymax=expression +se)) +
+  theme_bw() +
+  theme(axis.title.x = element_blank())
+ggsave("./stemANDdiff_lumpap_FGFR3_UTX_noMLL_genotypes.pdf", device = "pdf",  width = 10, height = 9)
+
+
+
+writeLines(con = paste("sessionInfo.txt"), text = capture.output(sessionInfo()))
+```
+
+

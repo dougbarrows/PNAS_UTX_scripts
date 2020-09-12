@@ -1,0 +1,434 @@
+---
+title: "RNA seq UMUC1 20181222"
+author: "Doug Barrows"
+date: "December 22, 2017"
+output: pdf_document
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE, cache = F}
+knitr::opts_chunk$set(echo = TRUE, error = TRUE)
+```
+### DESeq2 analysis for all samples 
+```{r}
+
+
+#The following code (not evaluated here) can be used to generate a table that connects transcripts to genes for summarizing Salmon transcript quantifications for differential gene expression. We simply read in the GTF file from the same database that we used for building the Salmon index (in this case, Gencode version 26), and then pull out a table with the transcript name for every gene.
+
+library(GenomicFeatures)
+
+### next few lines only need to be run if you havent run them before, otherwise, you can just load the database as shown below
+
+# download.file("ftp://ftp.sanger.ac.uk/pub/gencode/Gencode_human/release_27/gencode.v27.annotation.gtf.gz", "gencode.vh27.annotation.gtf.gz")
+# txdb <- makeTxDbFromGFF("gencode.vh27.annotation.gtf.gz")
+# saveDb(txdb, file="gencode.vh27.sqlite")
+# next time you can just load with this line (no need to makeTxDb...)
+txdb <- loadDb("gencode.vh27.sqlite") 
+columns(txdb)
+k <- keys(txdb, "GENEID")
+res <- AnnotationDbi::select(txdb, k, "TXNAME", "GENEID") #for every gene, tell me the transcripts that are associated with it
+
+tx2gene <- res[,2:1] #this will show a list that has one column with the transcript name, and another column with the corresponding geneID
+head(tx2gene)
+
+
+samplenames <- list.files("/Volumes/Labs//AllisLab/GRPShares/Common Files/Doug/Data_active/20171222_RNAseq_UMUC1_fullvssphere_analysis/salmon_analysis_v0.8.2/quants_for_DESeq/") #this is the directory with my Salmon outputs and I wirte their names into a vector 
+
+samplenames <- samplenames[c(1:6, 13:18, 7:12)]
+
+# differential expression between DMSO and MI503 
+media <- c(rep("full",3), rep("sphere",3), rep("full",3), rep("sphere",3), rep("full",3), rep("sphere",3))
+cell_line <- c(rep("EV", 6), rep("WT_UTX", 6), rep("HEAA_UTX", 6))
+colData <- data.frame(samplenames, media, cell_line)
+
+#We have used the run ID (SRR...) to keep track of the reads and quantifications, so we can build a vector which points to our quantification files using this column of coldata. We use names to name this vector with the run IDs as well.
+files_quant <- file.path("/Volumes/Labs///AllisLab/GRPShares/Common Files/Doug/Data_active/20171222_RNAseq_UMUC1_fullvssphere_analysis/salmon_analysis_v0.8.2/quants_for_DESeq/",colData$samplenames)
+names(files_quant) <- colData$samplenames
+head(files_quant,2)
+
+
+#Now we can use the tximport function to assemble all the quantifications from the 24 files, and to summarize the abundances, counts and transcript lengths to the gene level, for use with DESeq2 and other Bioconductor packages.
+
+
+library(rjson)
+library(tximport)
+
+
+txi <- tximport(files_quant, type="salmon", tx2gene=tx2gene)
+names(txi)
+dim(txi$abundance)
+dim(txi$counts)
+dim(txi$length)
+
+
+#Now, we will build a DESeqDataSet from the matrices in txi, which we will use for the rest of the workflow. This function brings along the estimated counts per gene, estimated by Salmon, as well as a normalizing offset based on the transcript lengths. This normalizing offset adjusts for the average transcript length of a gene, which can be influenced by differential isoform usage, as well as common RNA-seq biases, if we used Salmon flags for correcting for various biases. Both of these effects -- differential isoform usage and technical biases -- can change the effective length of a gene, and so both are useful as normalizing offsets in a statistical comparisons of counts across samples.
+
+#When building the DESeqDataSet we have to specify a design, which is a formula in R that begins with a tilde and explains what terms, or coefficients, we want to use to model the counts. The design is used by the dispersion estimation and model fitting functions in DESeq2, so we can change it later, but we will have to rerun the main functions to re-estimate the parameters.
+library(DESeq2)
+
+dds <- DESeqDataSetFromTximport(txi, colData, ~ cell_line)
+dds
+head(counts(dds))
+
+raw_counts_df <- data.frame(counts(dds))
+
+library(org.Hs.eg.db)
+geneIDs <- substr(rownames(raw_counts_df), 1, 15)
+gene_symbols <- mapIds(org.Hs.eg.db, keys = geneIDs, column = "SYMBOL", keytype = "ENSEMBL", multiVals = "first")
+raw_counts_df$GeneName <- gene_symbols
+raw_counts_df <- raw_counts_df[, c(19, 1:18)]
+write.csv(raw_counts_df, "../raw_counts_allsamples_full_vs_sphere_UMUC1.csv")
+
+#Already, we can take a look at how the samples related to each other. In DESeq2, we have special functions for transforming the counts, so that they can be easily visualized (we will not transform the counts, but use the raw counts later, for statistical testing).
+
+#My favorite of these transformation is the vst, mostly because it is very fast, and provides transformed (nearly log-scale) data which is robust to many problems associated with log-transformed data (for more details, see the DESeq2 workflow or vignette ).
+
+#blind=FALSE refers to the fact that we will use the design in estimating the global scale of biological variability, but not directly in the transformation:
+
+
+vsd <- vst(dds, blind=FALSE)
+
+#Now that we have normalized and transformed the data, it will have roughly the same variance (except for differentially expressed genes) across the range of counts, so from counts in the single digits, up to the most highly expressed genes with very high counts.
+
+#We can make a PCA plot, which shows the distribution of the samples among the top two dimensions, in terms of the variance explained. It's simply a rotation and projection of the transformed data, but picking the "best" 2 dimensions out of the tens of thousands (number of genes).
+library(ggplot2)
+
+plotPCA(vsd, intgroup = c("media","cell_line"))
+ggsave("allsamples.PCAplot.pdf", device = "pdf")
+
+
+
+#We will chop off the version number of the gene IDs, so that we can better look up their annotation information later.
+#However, we have a few genes which would have duplicated gene IDs after chopping off the version number, so in order to proceed we have to also use make.unique to indicate that some genes are duplicated. (It might be worth looking into why we have multiple versions of genes with the same base ID coming from our annotation.)
+table(duplicated(substr(rownames(dds),1,18)))
+
+rownames(dds) <- make.unique(substr(rownames(dds),1,18))
+
+head(dds)
+
+#Now we can run our differential expression pipeline. First, it is sometimes convenient to remove genes where all the samples have very small counts. It's less of an issue for the statistical methods, and mostly just wasted computation, as it is not possible for these genes to exhibit statistical significance for differential expression. Here we count how many genes (out of those with at least a single count) have 3 samples with a count of 10 or more:
+dds <- dds[rowSums(counts(dds)) > 0,]
+keep <- rowSums(counts(dds) >= 10) >= 3
+table(keep)
+
+dds <- dds[keep,] #filter them out
+
+
+#########
+# get a complete counts table that is normalized to read count so that we can look at specific genes across all samples
+#########
+
+# use this code to take the dds object from deseq and get the normalized counts
+
+dds <- estimateSizeFactors(dds)
+dds_norm <- counts(dds, normalized=TRUE)
+dds_norm_df <- data.frame(dds_norm)
+
+library(org.Hs.eg.db)
+geneIDs <- substr(rownames(dds_norm_df), 1, 15)
+gene_symbols <- mapIds(org.Hs.eg.db, keys = geneIDs, column = "SYMBOL", keytype = "ENSEMBL", multiVals = "first")
+dds_norm_df$GeneName <- gene_symbols
+dds_norm_df <- dds_norm_df[, c(19, 1:18)]
+
+dds_norm_df[which(dds_norm_df$GeneName == "KRT5"), ]
+
+#saveRDS(dds_norm_df, "normalized_counts_allsamples.RData")
+
+# write.csv(dds_norm_df, "normalized_counts_allsamples.csv")
+
+
+
+```
+
+### DESeq2 analysis for EV full vs EV sphere
+```{r}
+
+
+
+#The following code (not evaluated here) can be used to generate a table that connects transcripts to genes for summarizing Salmon transcript quantifications for differential gene expression. We simply read in the GTF file from the same database that we used for building the Salmon index (in this case, Gencode version 26), and then pull out a table with the transcript name for every gene.
+
+library(GenomicFeatures)
+
+# this was all done above in chunk 1, so no need to do it here
+
+#download.file("ftp://ftp.sanger.ac.uk/pub/gencode/Gencode_human/release_27/gencode.v27.annotation.gtf.gz", "gencode.vh27.annotation.gtf.gz")
+#txdb <- makeTxDbFromGFF("gencode.vh27.annotation.gtf.gz")
+#saveDb(txdb, file="gencode.vh27.sqlite")
+# next time you can just load with this line (no need to makeTxDb...)
+#txdb <- loadDb("gencode.vh27.sqlite") 
+#columns(txdb)
+#k <- keys(txdb, "GENEID")
+#res <- AnnotationDbi::select(txdb, k, "TXNAME", "GENEID") #for every gene, tell me the transcripts that are associated with it
+#tx2gene <- res[,2:1] #this will show a list that has one column with the transcript name, and another column with the corresponding geneID
+#head(tx2gene)
+
+
+samplenames <- list.files("/Volumes/Labs/AllisLab/GRPShares/Common Files/Doug/Data_active/20171222_RNAseq_UMUC1_fullvssphere_analysis/salmon_analysis_v0.8.2/DE_EVfull_vs_EVsphere/quants_EVfull_vs_EVsphere//") #this is the directory with my Salmon outputs and I wirte their names into a vector 
+
+
+
+# differential expression between EV full and EV sphere 
+media <- c(rep("full",3), rep("sphere",3))
+cell_line <- c(rep("EV", 6))
+colData <- data.frame(samplenames, media, cell_line)
+
+
+
+#We have used the run ID (SRR...) to keep track of the reads and quantifications, so we can build a vector which points to our quantification files using this column of coldata. We use names to name this vector with the run IDs as well.
+files_quant <- file.path("/Volumes/Labs/AllisLab/GRPShares/Common Files/Doug/Data_active/20171222_RNAseq_UMUC1_fullvssphere_analysis/salmon_analysis_v0.8.2/DE_EVfull_vs_EVsphere/quants_EVfull_vs_EVsphere//",colData$samplenames)
+names(files_quant) <- colData$samplenames
+head(files_quant,2)
+
+
+#Now we can use the tximport function to assemble all the quantifications from the 24 files, and to summarize the abundances, counts and transcript lengths to the gene level, for use with DESeq2 and other Bioconductor packages.
+
+#It's a good idea to first test on a single quantification file, which we show here:
+
+library(rjson)
+library(tximport)
+
+txi_test <- tximport(files_quant[1], type="salmon", tx2gene=tx2gene)
+txi <- tximport(files_quant, type="salmon", tx2gene=tx2gene)
+names(txi)
+dim(txi$abundance)
+dim(txi$counts)
+dim(txi$length)
+
+
+#Now, we will build a DESeqDataSet from the matrices in txi, which we will use for the rest of the workflow. This function brings along the estimated counts per gene, estimated by Salmon, as well as a normalizing offset based on the transcript lengths. This normalizing offset adjusts for the average transcript length of a gene, which can be influenced by differential isoform usage, as well as common RNA-seq biases, if we used Salmon flags for correcting for various biases. Both of these effects -- differential isoform usage and technical biases -- can change the effective length of a gene, and so both are useful as normalizing offsets in a statistical comparisons of counts across samples.
+
+#When building the DESeqDataSet we have to specify a design, which is a formula in R that begins with a tilde and explains what terms, or coefficients, we want to use to model the counts. The design is used by the dispersion estimation and model fitting functions in DESeq2, so we can change it later, but we will have to rerun the main functions to re-estimate the parameters.
+library(DESeq2)
+
+dds <- DESeqDataSetFromTximport(txi, colData, ~ media)
+dds
+
+#Already, we can take a look at how the samples related to each other. In DESeq2, we have special functions for transforming the counts, so that they can be easily visualized (we will not transform the counts, but use the raw counts later, for statistical testing).
+
+#My favorite of these transformation is the vst, mostly because it is very fast, and provides transformed (nearly log-scale) data which is robust to many problems associated with log-transformed data (for more details, see the DESeq2 workflow or vignette ).
+
+#blind=FALSE refers to the fact that we will use the design in estimating the global scale of biological variability, but not directly in the transformation:
+
+
+vsd <- vst(dds, blind=FALSE)
+
+#Now that we have normalized and transformed the data, it will have roughly the same variance (except for differentially expressed genes) across the range of counts, so from counts in the single digits, up to the most highly expressed genes with very high counts.
+
+#We can make a PCA plot, which shows the distribution of the samples among the top two dimensions, in terms of the variance explained. It's simply a rotation and projection of the transformed data, but picking the "best" 2 dimensions out of the tens of thousands (number of genes).
+
+plotPCA(vsd, intgroup = c("media","cell_line"))
+
+#We will chop off the version number of the gene IDs, so that we can better look up their annotation information later.
+#However, we have a few genes which would have duplicated gene IDs after chopping off the version number, so in order to proceed we have to also use make.unique to indicate that some genes are duplicated. (It might be worth looking into why we have multiple versions of genes with the same base ID coming from our annotation.)
+table(duplicated(substr(rownames(dds),1,18)))
+
+rownames(dds) <- make.unique(substr(rownames(dds),1,18))
+
+head(dds)
+
+#Now we can run our differential expression pipeline. First, it is sometimes convenient to remove genes where all the samples have very small counts. It's less of an issue for the statistical methods, and mostly just wasted computation, as it is not possible for these genes to exhibit statistical significance for differential expression. Here we count how many genes (out of those with at least a single count) have 3 samples with a count of 10 or more:
+dds <- dds[rowSums(counts(dds)) > 0,]
+keep <- rowSums(counts(dds) >= 10) >= 3
+table(keep)
+
+dds <- dds[keep,] #filter them out
+
+dds <- DESeq(dds)
+resultsNames(dds)
+
+# saveRDS(dds, "./dds_EVspherevsEVfull.RData")
+dds <- readRDS("./dds_EVspherevsEVfull.RData")
+
+```
+### DESeq2 analysis for EV full vs All sphere conditions
+```{r}
+
+
+
+#The following code (not evaluated here) can be used to generate a table that connects transcripts to genes for summarizing Salmon transcript quantifications for differential gene expression. We simply read in the GTF file from the same database that we used for building the Salmon index (in this case, Gencode version 26), and then pull out a table with the transcript name for every gene.
+
+library(GenomicFeatures)
+#download.file("ftp://ftp.sanger.ac.uk/pub/gencode/Gencode_human/release_27/gencode.v27.annotation.gtf.gz", "gencode.vh27.annotation.gtf.gz")
+#txdb <- makeTxDbFromGFF("gencode.vh27.annotation.gtf.gz")
+#saveDb(txdb, file="gencode.vh27.sqlite")
+# next time you can just load with this line (no need to makeTxDb...)
+ txdb <- loadDb("gencode.vh27.sqlite") 
+columns(txdb)
+k <- keys(txdb, "GENEID")
+res <- AnnotationDbi::select(txdb, k, "TXNAME", "GENEID") #for every gene, tell me the transcripts that are associated with it
+tx2gene <- res[,2:1] #this will show a list that has one column with the transcript name, and another column with the corresponding geneID
+head(tx2gene)
+
+
+samplenames <- list.files("/Volumes/Labs-2/AllisLab/GRPShares/Common Files/Doug/20171222_RNAseq_UMUC1_fullvssphere_analysis/salmon_analysis_v0.8.2/DE_EVfull_vs_allsphere/quants_EVfull_vs_allsphere//") #this is the directory with my Salmon outputs and I wirte their names into a vector 
+
+
+
+# differential expression between EV full and EV sphere 
+#media <- c(rep("full",3), rep("sphere",9))
+cell_line <- c(rep("EV_full", 3), rep("EV_sphere", 3), rep("HEAA_UTX_sphere", 3), rep("WT_UTX_sphere", 3))
+colData <- data.frame(samplenames, cell_line)
+levels(colData$cell_line)
+
+
+
+#We have used the run ID (SRR...) to keep track of the reads and quantifications, so we can build a vector which points to our quantification files using this column of coldata. We use names to name this vector with the run IDs as well.
+files_quant <- file.path("/Volumes/Labs-2/AllisLab/GRPShares/Common Files/Doug/20171222_RNAseq_UMUC1_fullvssphere_analysis/salmon_analysis_v0.8.2/DE_EVfull_vs_allsphere/quants_EVfull_vs_allsphere//",colData$samplenames)
+names(files_quant) <- colData$samplenames
+head(files_quant,2)
+
+
+
+library(rjson)
+library(tximport)
+
+txi_test <- tximport(files_quant[1], type="salmon", tx2gene=tx2gene)
+txi <- tximport(files_quant, type="salmon", tx2gene=tx2gene)
+names(txi)
+dim(txi$abundance)
+dim(txi$counts)
+dim(txi$length)
+
+library(DESeq2)
+
+dds <- DESeqDataSetFromTximport(txi, colData, ~ cell_line)
+dds
+
+
+vsd <- vst(dds, blind=FALSE)
+
+plotPCA(vsd, intgroup = c("media","cell_line"))
+
+
+table(duplicated(substr(rownames(dds),1,18)))
+
+rownames(dds) <- make.unique(substr(rownames(dds),1,18))
+
+head(dds)
+
+dds <- dds[rowSums(counts(dds)) > 0,]
+keep <- rowSums(counts(dds) >= 10) >= 3
+table(keep)
+
+dds <- dds[keep,] #filter them out
+
+dds <- DESeq(dds)
+resultsNames(dds)
+
+res_EVspherevsEVfull <- results(dds, name = "cell_line_EV_sphere_vs_EV_full")
+```
+
+###DESeq2 analysis for full only! 
+
+```{r}
+
+samplenames_full <- list.files("/Volumes/Shares/AllisLab/GRPShares/Common Files/Doug/Data_active/20171222_RNAseq_UMUC1_fullvssphere_analysis/salmon_analysis_v0.8.2/DE_fullonly/quants_fullonly/") #this is the directory with my Salmon outputs and I wirte their names into a vector 
+
+
+
+# differential expression between DMSO and MI503 
+media_full <- c(rep("full",9))
+cell_line_full <- c(rep("EV", 3), rep("HEAA UTX", 3), rep("WT UTX", 3))
+colData_full <- data.frame(samplenames_full, media_full, cell_line_full)
+
+files_quant_full <- file.path("/Volumes/Shares/AllisLab/GRPShares/Common Files/Doug/Data_active/20171222_RNAseq_UMUC1_fullvssphere_analysis/salmon_analysis_v0.8.2/DE_fullonly/quants_fullonly/",colData_full$samplenames_full)
+names(files_quant_full) <- colData_full$samplenames_full
+
+
+
+library(rjson)
+library(tximport)
+
+txi_full <- tximport(files_quant_full, type="salmon", tx2gene=tx2gene)
+names(txi_full)
+dim(txi_full$abundance)
+dim(txi_full$counts)
+dim(txi_full$length)
+
+
+#######################
+# do DESeq using EV as the reference 
+######################
+
+library(DESeq2)
+
+dds_full <- DESeqDataSetFromTximport(txi_full, colData_full, ~ cell_line_full)
+dds_full
+
+vsd_full <- vst(dds_full, blind=FALSE)
+
+plotPCA(vsd_full, intgroup = "cell_line_full")
+
+table(duplicated(substr(rownames(dds_full),1,18)))
+
+rownames(dds_full) <- make.unique(substr(rownames(dds_full),1,18))
+
+head(dds_full)
+
+dds_full <- dds_full[rowSums(counts(dds_full)) > 0,]
+keep_full <- rowSums(counts(dds_full) >= 10) >= 3
+table(keep_full)
+
+dds_full <- dds_full[keep_full,] #filter them out
+head(counts(dds_full))
+
+dds_full <- DESeq(dds_full)
+resultsNames(dds_full)
+
+dds_full <- readRDS("dds_fullconditions.RData")
+
+
+```
+
+### DESeq2 analysis for sphere only
+```{r}
+samplenames_sphere <- list.files("/Volumes/Labs-7/AllisLab/GRPShares/Common Files/Doug/20171222_RNAseq_UMUC1_fullvssphere_analysis/salmon_analysis_v0.8.2/DE_sphereonly/quants_sphereonly/") 
+
+media_sphere <- c(rep("sphere",9))
+cell_line_sphere <- c(rep("EV", 3), rep("HEAA UTX", 3), rep("WT UTX", 3))
+colData_sphere <- data.frame(samplenames_sphere, media_sphere, cell_line_sphere)
+
+files_quant_sphere <- file.path("/Volumes/Labs-7/AllisLab/GRPShares/Common Files/Doug/20171222_RNAseq_UMUC1_fullvssphere_analysis/salmon_analysis_v0.8.2/DE_sphereonly/quants_sphereonly/",colData_sphere$samplenames_sphere)
+names(files_quant_sphere) <- colData_sphere$samplenames_sphere
+
+
+library(rjson)
+library(tximport)
+
+txi_sphere <- tximport(files_quant_sphere, type="salmon", tx2gene=tx2gene)
+names(txi_sphere)
+dim(txi_sphere$abundance)
+dim(txi_sphere$counts)
+dim(txi_sphere$length)
+
+library(DESeq2)
+
+dds_sphere <- DESeqDataSetFromTximport(txi_sphere, colData_sphere, ~ cell_line_sphere)
+dds_sphere
+
+vsd_sphere <- vst(dds_sphere, blind=FALSE)
+
+plotPCA(vsd_sphere, intgroup = "cell_line_sphere")
+
+
+table(duplicated(substr(rownames(dds_sphere),1,18)))
+
+rownames(dds_sphere) <- make.unique(substr(rownames(dds_sphere),1,18))
+head(dds_sphere)
+
+dds_sphere <- dds_sphere[rowSums(counts(dds_sphere)) > 0,]
+keep_sphere <- rowSums(counts(dds_sphere) >= 10) >= 3
+table(keep_sphere)
+
+dds_sphere <- dds_sphere[keep_sphere,] #filter them out
+
+dds_sphere <- DESeq(dds_sphere)
+resultsNames(dds_sphere)
+
+saveRDS(dds_sphere, "dds_sphereconditions.RData")
+
+dds_sphere <- readRDS("dds_sphereconditions.RData")
+
+
+```
+

@@ -1,0 +1,238 @@
+---
+title: "Untitled"
+author: "Doug Barrows"
+date: "April 9, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+patient_list_path <- "../../alterations_across_samples _FGFR3_UTX_MLL3_4_TCGA2017.tsv"
+genes <-  c("FGFR3")
+# this should be some combination of "MUT", "HOMDEL", or "AMP" surrounded by "|" "&"
+alteration_grep <- c("MUT", "AMP")
+#counts_table_path <- "~/Desktop/Data/TCGA_BLCA_updated2017/file_TCGA/tcga/data_RNA_Seq_v2_expression_median.txt"
+
+output_file_name <- "FGFR3_AMPvMUT_lumpap"
+
+tcga_rnaseq_DESeq2 (patient_list_path = patient_list_path, genes = genes, alteration_grep = alteration_grep, counts_table_path = counts_table_path, output_file_name = output_file_name)
+
+tcga_rnaseq_DESeq2 <- function (patient_list_path, genes, alteration_grep, counts_table_path, output_file_name) {
+  
+dir.create(output_file_name)
+
+if (missing(alteration_grep)){
+  alteration_grep <- "."
+}
+  
+patients <- read.delim(patient_list_path)
+
+# change the column names to only be the gene name and not the long name it is given in TCGA table
+colnames(patients)[5:ncol(patients)] <- gsub("\\..*","",colnames(patients)[5:ncol(patients)])
+patients[ncol(patients) + 1] <- patients[ ,colnames(patients) == genes]
+patients <- patients[,c(2,ncol(patients))]
+colnames(patients)[2] <- genes
+
+
+filtered_patients <- vector("list", length = length(alteration_grep))
+for (i in seq_along(alteration_grep)) {
+  names(filtered_patients)[i] <- alteration_grep[i] 
+  filtered_patients[[i]] <- patients[grepl(alteration_grep[i], patients[,2]),]
+}
+
+# get just the patient list for each gene
+patient_list <- vector("list", length = length(filtered_patients))
+for (i in seq_along(filtered_patients)){
+  patient_list[[i]] <- as.character(filtered_patients[[i]]$Sample.ID)
+}
+names(patient_list) <- names(filtered_patients)
+
+# DESeq2 analysis
+
+# read in RNA seq data
+
+print("Reading in counts table...")
+counts <- readRDS("../normalizedCounts_revisedPatientNames_TCGAbiolinks.RData")
+
+counts <- apply (counts, c (1, 2), function (x) {
+  (as.integer(x))
+  })
+
+# generally not all paitents that had RNA seq had a full mutational profile, so need to filter the full list from RNA seq table so it only contains patients with full mutational profile
+
+counts <- counts[ , colnames(counts) %in% patients$Sample.ID]
+
+
+library(dplyr)
+meta_data <- read.csv("../../..//../metadata.csv", header = TRUE, stringsAsFactors = FALSE)
+
+all_lumpap_tumors <- filter(meta_data, (mRNA.cluster == "Luminal_papillary")) %>% select(Case.ID)
+counts <- counts[ , substr(colnames(counts), 1, 12) %in% all_lumpap_tumors$Case.ID]
+
+# this will create a list of logical vectors that comtin an index for each patient, and will report whether that patient has an alteration (here thats any kind of mutation, or deletion) in that gene
+mutant_label <- vector("list", length = length(patient_list))
+for (i in seq_along(patient_list)) {
+  mutant_label[[i]] <- colnames(counts) %in% patient_list[[i]]
+}
+names(mutant_label) <- names(patient_list)
+
+# this should match up with the numbers of alterations above for each gene, keep only the information about how many alterations for each type exitst, then write this to a file 
+mutant_label_table <- lapply(mutant_label, table)
+mutant_label_table <- unlist(mutant_label_table)
+mutant_label_table <- data.frame(mutant_label_table)
+mutant_label_table <- mutant_label_table[grepl("TRUE", rownames(mutant_label_table)), ,drop = FALSE]
+write.table(mutant_label_table, paste0("./",output_file_name, "/", output_file_name, "_alterations.txt"), quote = FALSE)
+
+# change the logical vector for each gene to a character vector and will label with "wt" or "alt" 
+for (i in seq_along(mutant_label)) {
+  for (x in seq_along(mutant_label[[i]])) {
+    if (mutant_label[[i]][x] == "TRUE") {
+    mutant_label[[i]][x] <- paste0(genes, names(mutant_label[i]))
+    }
+    else {
+    mutant_label[[i]][x] <- paste0("no", names(mutant_label[i]))
+    }
+  }
+}
+
+# this should match up with the numbers of alterations above for each gene
+lapply(mutant_label, table)
+
+
+# this will combine all of the mutant label vecotrs into one vector that labels each patient for mutation status of all genes queried
+genes_label <- vector(mode = "character", length = length(mutant_label[[1]]))
+for (i in seq_along(mutant_label)) {
+  if(i == 1) {
+    for (x in seq_along(mutant_label[[1]])) {
+     genes_label[x] <- paste(mutant_label[[i]][x], sep = "_")
+    }
+  }
+  else {
+    for (x in seq_along(mutant_label[[1]])) {
+     genes_label[x] <- paste(genes_label[x], mutant_label[[i]][x], sep = "_")
+    
+    }
+  }
+}
+
+genotype <- factor(genes_label)
+sample_names <- colnames(counts)
+
+
+colData <- data.frame(sample_names, genotype)
+colData <- na.omit(colData)
+
+genotype_table <- data.frame(table(colData$genotype))
+colnames(genotype_table) <- c("genotype", "occurances")
+write.table(genotype_table, paste0("./",output_file_name, "/", output_file_name, "_genotype.txt"), quote = FALSE)
+
+
+# make sure the reference level for the genotype column of colData is wt for all genes
+for (i in seq_along(alteration_grep)) {
+  if (i == 1) {
+    ref_level <- ""
+  }
+  ifelse (i == length(alteration_grep), ref_level <- paste0(ref_level, "no", alteration_grep[i]), ref_level <- paste0(ref_level, "no", alteration_grep[i], "_"))
+}
+colData$genotype <- relevel(colData$genotype, ref = ref_level)
+levels(colData$genotype)
+
+
+
+######### important
+# this will add a column to colData that indicates if the sample has FGFR3 missense mutation 
+
+colData$FGFR3mis <- NA
+for (i in seq_along(colData$genotype)) {
+if (grepl("FGFR3mis", colData$genotype[i])) {
+  colData$FGFR3mis[i] <- "FGFR3mis"
+}
+  else{
+    colData$FGFR3mis[i] <- "NOT_FGFR3mis"
+  }
+}
+
+colData$FGFR3mis <- relevel(as.factor(colData$FGFR3mis), ref = "NOT_FGFR3mis")
+levels(colData$FGFR3mis)
+
+
+# will also make a PCA plot based on the mRNA clusters to see where the genotypes fall, so used this code from otehr functions
+library(dplyr)
+meta_data <- read.csv("../../../../metadata.csv", header = TRUE, stringsAsFactors = FALSE)
+
+cancer_type <- meta_data[ , c(1,48)]
+
+cancer_type <- cancer_type[cancer_type$Case.ID %in% substr(colnames(counts), 1, 12) ,]
+cancer_type <- cancer_type[order(match(cancer_type$Case.ID, colnames(counts))),]
+
+#check to make sure identical
+identical(cancer_type$Case.ID, substr(colnames(counts), 1, 12))
+
+colData$mRNA_cluster <- cancer_type$mRNA.cluster
+table(colData$mRNA_cluster)
+
+library(DESeq2)
+dds <- DESeqDataSetFromMatrix(countData = counts, colData = colData, design = ~genotype)
+
+print("Generating PCA...")
+vsd<- vst(dds, blind=FALSE)
+
+# write the PCA plot to a file - not sure why I needed to make a function for it as opposed to only using brackets to make the lines run together. That method worked for PNG but not for PDF. But this seems to work for PDF
+
+# also included one for mRNA cluster as it is interesting to see where the certain genotypes lay relative to these clusters
+generate_pdf <- function (){
+pdf(file = paste0("./",output_file_name, "/", output_file_name, "_mRNA_cluster_PCA.pdf"))
+print(plotPCA(vsd, "mRNA_cluster"))
+dev.off()
+}
+generate_pdf()
+
+generate_pdf <- function (){
+pdf(file = paste0("./",output_file_name, "/", output_file_name, "__genotype_PCA.pdf"))
+print(plotPCA(vsd, "genotype"))
+dev.off()
+}
+generate_pdf()
+
+pcRes <- prcomp(t(assay(vsd)))
+
+colData(vsd)$FGFR3mis <- as.factor(colData(vsd)$FGFR3mis)
+plot(pcRes$x,
+     col=colData(vsd)$FGFR3mis,
+     pch=20,
+     cex=2)
+
+dds_filter <- dds[rowSums(counts(dds)) > 0,]
+
+keep_dds <- rowSums(counts(dds_filter) >= 10) >= 3
+print("Table of Filtered out genes:")
+print(table(keep_dds))
+
+dds_filter <- dds_filter[keep_dds,]
+
+print("Performing DESea2 analysis...")
+dds_filter <- DESeq(dds_filter)
+resultsNames(dds_filter)
+
+saveRDS(dds_filter, paste0("./", output_file_name, "/", output_file_name, "_dds.RData"))
+
+# get results tables for all possible combinations
+
+dds_comparisons <- resultsNames(dds_filter)
+
+dds_DE <- vector("list", length = length(dds_comparisons) - 1)
+for (i in 2:length(dds_comparisons)) {
+  dds_DE[[i-1]] <- results(dds_filter, name = dds_comparisons[i])
+  dds_DE[[i-1]] <- as.data.frame(dds_DE[[i-1]][order(dds_DE[[i-1]]$stat), ])
+  temp <- gsub("v.*","",dds_comparisons[i])
+  temp <- gsub("genotype_", "", temp)
+  write.csv(dds_DE[[i-1]], paste0("./", output_file_name, "/", output_file_name, "_", temp, "_DESeq2_result.csv"), quote = FALSE)
+}
+
+}
+
+```

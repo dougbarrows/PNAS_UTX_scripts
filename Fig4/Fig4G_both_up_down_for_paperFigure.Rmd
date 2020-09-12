@@ -1,0 +1,206 @@
+---
+title: "Untitled"
+author: "Doug Barrows"
+date: "11/8/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# get the genes that change significantly down with 1.5 fold change in 249 vs WT FGFR3
+
+```{r}
+
+S249vWTFGFR3_down_1.5fold <- read.table("../../../S249EV_v_WTFGFR3EV_LCF1.5_downgenes.txt", stringsAsFactors = FALSE) %>%
+  .[,1]
+
+S249vWTFGFR3_up_1.5fold <- read.table("../../../S249EV_v_WTFGFR3EV_LCF1.5_upgenes.txt", stringsAsFactors = FALSE) %>%
+  .[,1]
+```
+
+# load in counts 
+```{r}
+
+library(DESeq2)
+dds_allsamples <- readRDS("../../../dds_S249EV_as_ref.RData")
+dds_allsamples <- estimateSizeFactors(dds_allsamples)
+counts_all_samples <- counts(dds_allsamples, normalized=T)
+
+counts_all_samples_norm_df <- data.frame(counts_all_samples)
+counts_all_samples_norm_df <- counts_all_samples_norm_df[, c(1:6, 13:18, 7:12)]
+
+library(org.Hs.eg.db)
+geneIDs <- substr(rownames(counts_all_samples_norm_df), 1, 15)
+gene_symbols <- mapIds(org.Hs.eg.db, keys = geneIDs, column = "SYMBOL", keytype = "ENSEMBL", multiVals = "first")
+counts_all_samples_norm_df$GeneName <- gene_symbols
+
+```
+
+# get average counts averaged per sample type, not haveing all replicates
+```{r}
+EV_EV_mean <- data.frame(GeneName = counts_all_samples_norm_df$GeneName, EV_EV_mean  = rowMeans(counts_all_samples_norm_df[1:3]))
+EV_UTX_mean <- data.frame(GeneName= counts_all_samples_norm_df$GeneName, EV_UTX_mean  = rowMeans(counts_all_samples_norm_df[4:6]))
+WT_EV_mean <- data.frame(GeneName= counts_all_samples_norm_df$GeneName, WT_EV_mean  = rowMeans(counts_all_samples_norm_df[7:9]))
+WT_UTX_mean <- data.frame(GeneName= counts_all_samples_norm_df$GeneName, WT_UTX_mean  = rowMeans(counts_all_samples_norm_df[10:12]))
+S249_EV_mean <- data.frame(GeneName= counts_all_samples_norm_df$GeneName, S249_EV_mean  = rowMeans(counts_all_samples_norm_df[13:15]))
+S249_UTX_mean <- data.frame(GeneName= counts_all_samples_norm_df$GeneName, S249_UTX_mean  = rowMeans(counts_all_samples_norm_df[16:18]))
+
+# merge was taking forever so I wanted to check that hte gnes were identical before just making new DF
+
+all(sapply(list(EV_UTX_mean$GeneName, WT_EV_mean$GeneName, WT_UTX_mean$GeneName, S249_EV_mean$GeneName, S249_UTX_mean$GeneName), FUN = identical, EV_EV_mean$GeneName))
+
+counts_all_samples_norm_df <- cbind(EV_EV_mean, 
+                         EV_UTX = EV_UTX_mean$EV_UTX_mean,
+                         WT_EV = WT_EV_mean$WT_EV_mean,
+                         WT_UTX = WT_UTX_mean$WT_UTX_mean,
+                         S249_EV = S249_EV_mean$S249_EV_mean,
+                         S249_UTX = S249_UTX_mean$S249_UTX_mean)
+colnames(counts_all_samples_norm_df)[2] <- "EV_EV"
+
+```
+
+#GSVA
+```{r}
+library(GSVA)
+
+gene_lists <- list(down = S249vWTFGFR3_down_1.5fold,
+                  up = S249vWTFGFR3_up_1.5fold)
+
+counts_all_samples_norm_SymRowName <- counts_all_samples_norm_df
+counts_all_samples_norm_SymRowName <- counts_all_samples_norm_SymRowName[!duplicated(counts_all_samples_norm_SymRowName$GeneName), ]
+counts_all_samples_norm_SymRowName <- counts_all_samples_norm_SymRowName[!is.na(counts_all_samples_norm_SymRowName$GeneName), ]
+rownames(counts_all_samples_norm_SymRowName) <- counts_all_samples_norm_SymRowName$GeneName
+counts_all_samples_norm_SymRowName <- dplyr::select(counts_all_samples_norm_SymRowName, -GeneName)
+counts_all_samples_norm_SymRowName_mat <- as.matrix(counts_all_samples_norm_SymRowName)
+
+gsva_up_down <- gsva(counts_all_samples_norm_SymRowName_mat, 
+                 gene_lists, 
+                 min.sz=5, 
+                 max.sz=500, 
+                 kcdf="Poisson", 
+                 mx.diff=TRUE, 
+                 verbose=FALSE, 
+                 parallel.sz=1)
+
+# use log2 counts 
+
+counts_all_samples_norm_SymRowName_mat_log2 <- log2(counts_all_samples_norm_SymRowName_mat)
+
+gsva_up_down_log <- gsva(counts_all_samples_norm_SymRowName_mat, 
+                 gene_lists, 
+                 min.sz=5, 
+                 max.sz=500, 
+                 #kcdf="Poisson",  # log data should be gaussian. not poisson
+                 mx.diff=TRUE, 
+                 verbose=FALSE, 
+                 parallel.sz=1)
+
+library(pheatmap)
+pheatmap(gsva_up_down_log, cluster_cols = FALSE)
+pheatmap(gsva_up_down_log[ , 3:6], cluster_cols = FALSE) # no EV
+
+```
+
+# select genes that go up and down, log transform
+```{r}
+counts_norm_downinS249C <- counts_all_samples_norm_df[counts_all_samples_norm_df$GeneName %in% S249vWTFGFR3_down_1.5fold, ]
+counts_norm_downinS249C <- counts_norm_downinS249C[!duplicated(counts_norm_downinS249C$GeneName),]
+rownames(counts_norm_downinS249C) <- counts_norm_downinS249C$GeneName
+counts_norm_downinS249C <- counts_norm_downinS249C[,-1]
+counts_norm_downinS249C_mat <- as.matrix(counts_norm_downinS249C)
+counts_norm_downinS249C_mat_log2 <- log2(counts_norm_downinS249C_mat)
+counts_norm_downinS249C_mat_log2 <- na.omit(counts_norm_downinS249C_mat_log2)
+counts_norm_downinS249C_mat_log2 <- counts_norm_downinS249C_mat_log2[is.finite(rowSums(counts_norm_downinS249C_mat_log2)),]
+
+
+counts_norm_upin249C <- counts_all_samples_norm_df[counts_all_samples_norm_df$GeneName %in% S249vWTFGFR3_up_1.5fold, ]
+counts_norm_upin249C <- counts_norm_upin249C[!duplicated(counts_norm_upin249C$GeneName),]
+rownames(counts_norm_upin249C) <- counts_norm_upin249C$GeneName
+counts_norm_upin249C <- counts_norm_upin249C[,-1]
+counts_norm_upin249C_mat <- as.matrix(counts_norm_upin249C)
+counts_norm_upin249C_mat_log2 <- log2(counts_norm_upin249C_mat)
+counts_norm_upin249C_mat_log2 <- na.omit(counts_norm_upin249C_mat_log2)
+counts_norm_upin249C_mat_log2 <- counts_norm_upin249C_mat_log2[is.finite(rowSums(counts_norm_upin249C_mat_log2)),]
+
+counts_UpandDown <- rbind(counts_norm_downinS249C_mat_log2, counts_norm_upin249C_mat_log2)
+```
+
+# make heatmap from this matrix of log counts
+
+```{r}
+library(pheatmap)
+pheatmap(counts_norm_downinS249C_mat_log2, cluster_cols = FALSE, scale = "row")
+pheatmap(counts_norm_upin249C_mat_log2, cluster_cols = FALSE, scale = "row")
+
+# no ev
+
+pdf("")
+pheatmap(counts_norm_downinS249C_mat_log2[ , 3:6], cluster_cols = FALSE, scale = "row")
+pheatmap(counts_norm_upin249C_mat_log2[ , 3:6], cluster_cols = FALSE, scale = "row")
+
+```
+
+
+```{r}
+# make boxplot of zscores
+
+###### DO NOT include EV-EV and EV-UTX smaples in scaling
+library(tidyr)
+counts_UpandDown <- counts_UpandDown[, 3:6]
+counts_UpandDown_scaled <- t(scale(t(counts_UpandDown)))
+counts_UpandDown_scaled <- as.data.frame(counts_UpandDown_scaled)
+counts_UpandDown_scaled$GeneName <- rownames(counts_UpandDown_scaled)
+counts_UpandDown_scaled$up_down <- ifelse(counts_UpandDown_scaled$GeneName %in% S249vWTFGFR3_down_1.5fold, "Down in S249C vs WTFGFR3", 
+                                          ifelse(counts_UpandDown_scaled$GeneName %in% S249vWTFGFR3_up_1.5fold, "Up in S249C vs WTFGFR3", "none"))
+counts_UpandDown_scaled_long <- gather(counts_UpandDown_scaled, key = sample, value = zscore, WT_EV:S249_UTX )
+counts_UpandDown_scaled_long$sample <- ordered(counts_UpandDown_scaled_long$sample,
+                                                                levels = c("WT_EV", "WT_UTX", "S249_EV", "S249_UTX"))
+
+# stats - Wilcox Rank Sum
+
+S249EV_vs_WTEV_wilcox_down <- wilcox.test(x = counts_UpandDown_scaled_long[counts_UpandDown_scaled_long$up_down == "Down in S249C vs WTFGFR3" & counts_UpandDown_scaled_long$sample == "WT_EV", 4],
+                                          y = counts_UpandDown_scaled_long[counts_UpandDown_scaled_long$up_down == "Down in S249C vs WTFGFR3" & counts_UpandDown_scaled_long$sample == "S249_EV", 4])
+
+writeLines(con = 'S249EV_vs_WTEV_wilcox_downGenes.txt',
+           text = capture.output(S249EV_vs_WTEV_wilcox_down))
+
+S249EV_vs_S249UTX_wilcox_down <- wilcox.test(x = counts_UpandDown_scaled_long[counts_UpandDown_scaled_long$up_down == "Down in S249C vs WTFGFR3" & counts_UpandDown_scaled_long$sample == "S249_EV", 4],
+                                          y = counts_UpandDown_scaled_long[counts_UpandDown_scaled_long$up_down == "Down in S249C vs WTFGFR3" & counts_UpandDown_scaled_long$sample == "S249_UTX", 4])
+
+writeLines(con = 'S249EV_vs_S249UTX_wilcox_downGenes.txt',
+           text = capture.output(S249EV_vs_S249UTX_wilcox_down))
+
+S249EV_vs_WTEV_wilcox_up <- wilcox.test(x = counts_UpandDown_scaled_long[counts_UpandDown_scaled_long$up_down == "Up in S249C vs WTFGFR3" & counts_UpandDown_scaled_long$sample == "WT_EV", 4],
+                                          y = counts_UpandDown_scaled_long[counts_UpandDown_scaled_long$up_down == "Up in S249C vs WTFGFR3" & counts_UpandDown_scaled_long$sample == "S249_EV", 4])
+
+writeLines(con = 'S249EV_vs_WTEV_wilcox_upGenes.txt',
+           text = capture.output(S249EV_vs_WTEV_wilcox_up))
+
+S249EV_vs_S249UTX_wilcox_up <- wilcox.test(x = counts_UpandDown_scaled_long[counts_UpandDown_scaled_long$up_down == "Up in S249C vs WTFGFR3" & counts_UpandDown_scaled_long$sample == "S249_EV", 4],
+                                          y = counts_UpandDown_scaled_long[counts_UpandDown_scaled_long$up_down == "Up in S249C vs WTFGFR3" & counts_UpandDown_scaled_long$sample == "S249_UTX", 4])
+
+writeLines(con = 'S249EV_vs_S249UTX_wilcox_upGenes.txt',
+           text = capture.output(S249EV_vs_S249UTX_wilcox_up))
+
+
+library(ggplot2)
+
+ggplot(counts_UpandDown_scaled_long, mapping = aes(x = sample, y = zscore, fill = up_down)) + 
+  geom_boxplot() +
+  facet_grid(~up_down) + 
+  theme_light() + 
+  scale_fill_manual(values=c("#FF9999", "#3399FF")) + 
+  theme(legend.title = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        strip.text.x = element_text(colour = "black", face = "bold")) + 
+  xlab("") + 
+  ylab("zscore of log2(normalized read count)")
+ggsave("up_and_down_S249vsWTFGFR3_LFC1.5_forpaper.pdf", device = "pdf", height = 5, width = 7, useDingbats=FALSE)
+```
+
+
+

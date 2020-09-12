@@ -1,0 +1,228 @@
+---
+title: "Intersect and Gain/loss of peaks between two bed files"
+author: "Doug Barrows"
+date: "October 20, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### this function will take bed files as the input and find the overlaping peaks (with a specified allowable gap between peaks), and the unique peaks for each bed. It will then out put those peaks, and give you gene lists for genes that have these peaks near their promoters, and out put GO terms in a format that can be pasted into Revigo for a nice visual output. It will also output genomic annotation for the input beds.
+
+### you must give the path pointing to the files, give a prefix for the output files, give the path to the folder where you want the output to go, and give the names you want to appear on the annotation and overlap plots for each bed file.
+
+### the gene ontology can take some time, so you can include "gene_ontology = FALSE" in the function input to skip this part and it shouldn't take much time to run
+
+```{r}
+
+bed_overlap_unique_hg19_mm  <- function(input_paths, file_prefix, chip_names, output_path, genome, gap, gene_ontology) {
+
+library(rtracklayer)
+library(GenomicRanges)
+library(ChIPseeker)
+library(ChIPpeakAnno)
+library(goseq)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(TxDb.Hsapiens.UCSC.hg38.knownGene)
+library(TxDb.Mmusculus.UCSC.mm9.knownGene)
+library(TxDb.Mmusculus.UCSC.mm10.knownGene)
+library(org.Hs.eg.db)
+library(org.Mm.eg.db)
+library(AnnotationDbi)
+library(ggplot2)
+
+
+#not sure if this really works, work on it and test it
+#SetLogFile(base.file = "mylogfile.log")
+
+
+#this will make it so if an output path is not entered, it will set the path to NULL and files will be saved in the directory in which this R Markdown file exists
+if(missing(output_path)) {
+       output_path <- getwd()
+} 
+
+#create new folders so that the outputs can go into separate places
+dir.create(paste0(output_path, "/bed_files/"))
+bed_path <- paste0(output_path, "/bed_files/")
+
+dir.create(paste0(output_path, "/gene_lists/"))
+gene_list_path <- paste0(output_path, "/gene_lists/")
+
+if (gene_ontology == TRUE) {
+dir.create(paste0(output_path, "/gene_ontology_inputs/"))
+GO_input_path <- paste0(output_path, "/gene_ontology_inputs/")
+}
+
+if(missing(genome)) {
+       genome <- "hg19"
+    } 
+
+if(missing(gap)) {
+       gap <- 1000
+    }
+  
+if (missing(gene_ontology)) {
+  gene_ontology = TRUE
+}
+  
+if (length(input_paths) != 2) {
+  stop("number of bed files in 'input_paths' must be equal to 2", call. = FALSE)
+}
+  
+#bed file must start with chromosome, start, and end columns
+bed_list <- vector("list", length = length(input_paths)) 
+for (i in (seq_along(bed_list))) {
+  bed_list[[i]] <- read.table(input_paths[i])
+  if (class(bed_list[[i]][1,2]) != "int") {
+    bed_list[[i]] <- bed_list[[i]][-1, ]
+    class(bed_list[[i]][ ,2]) <- "int"
+    class(bed_list[[i]][ ,3]) <- "int"
+  }
+  bed_list[[i]] <- bed_list[[i]][ ,1:3]
+  colnames(bed_list[[i]]) <- c("chromosome", "start", "end")
+  bed_list[[i]] <- makeGRangesFromDataFrame(df = bed_list[[i]], keep.extra.columns = TRUE, seqnames.field = "chromosome", start.field = "start", end.field = "end")
+  names(bed_list)[i] <- chip_names[i]
+  seqlevelsStyle(bed_list[[i]]) <- "UCSC"
+}
+
+
+#genomic annotation
+if (genome == "hg19") {
+  txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene
+} else if (genome == "hg38") {
+  txdb <- TxDb.Hsapiens.UCSC.hg38.knownGene
+} else if (genome == "mm9") {
+  txdb <- TxDb.Mmusculus.UCSC.mm9.knownGene
+} else if (genome == "mm10") {
+  txdb <- TxDb.Mmusculus.UCSC.mm10.knownGene 
+}
+peakAnnoList_marklist <- lapply(bed_list, annotatePeak, TxDb=txdb, tssRegion=c(-5000, 3000), verbose=FALSE)
+plotAnnoBar(peakAnnoList_marklist)
+ggsave(paste0(output_path, file_prefix, "_", genome, "_annotation.pdf"), device = "pdf", height = 5, width = 7)
+
+#using ChIPpeakAnno to find overlapping regions and unique regions. Outputs bed files for overlap and unique peaks, and also a venn diagram. The output of "findOverlapsOfPeaks" will return a big object that has various merged and unmerged peak objects. I will extract the overlap and the unique peaks for each ChIP below. 
+ol <- findOverlapsOfPeaks(bed_list[[1]], bed_list[[2]], maxgap=gap)
+peaklist <- ol$peaklist
+overlappingPeaks <- ol$overlappingPeaks
+names(overlappingPeaks) 
+dim(overlappingPeaks[["bed_list..1..///bed_list..2.."]])
+
+overlap <- peaklist[["bed_list..1..///bed_list..2.."]]
+if (!is.null(overlap)) {
+rtracklayer::export(overlap, paste0(bed_path, chip_names[1], chip_names[2], "_overlap_gap", gap, ".bed"))
+}
+
+chip_peak1 <- peaklist[["bed_list..1.."]]
+if (!is.null(chip_peak1)) {
+rtracklayer::export(chip_peak1, paste0(bed_path, chip_names[1], "_only_gap", gap, ".bed"))
+}
+
+chip_peak2 <- peaklist[["bed_list..2.."]]
+if (!is.null(chip_peak2)) {
+rtracklayer::export(chip_peak2, paste0(bed_path,chip_names[2], "_only_gap", gap, ".bed"))
+}
+
+#the brackets below make all three lines of code be run at the same time
+{
+pdf(file = paste0(output_path, file_prefix, "_venn.pdf"))
+makeVennDiagram(ol, NameOfPeaks = c(chip_names[1],chip_names[2]), cat.pos = 0)
+dev.off()
+}
+
+#make a list of the overlap and the unique peaks so that we can easily apply functions to them below. As we will see, there is potential for removing one of these if it is empty, so will add names so these can carry  through and be used for file names
+overlap_unique_list <- list(overlap, chip_peak1, chip_peak2)
+names(overlap_unique_list) <- c(paste0("overlap_", chip_names[1],"_", chip_names[2]), paste0(chip_names[1], "_only"), paste0(chip_names[2], "_only"))
+
+#gene list for overlapping and unique peaks
+
+if (genome == "hg19") {
+  txdb_gene <- genes(TxDb.Hsapiens.UCSC.hg19.knownGene) 
+} else if (genome == "hg38") {
+  txdb_gene <- genes(TxDb.Hsapiens.UCSC.hg38.knownGene)
+} else if (genome == "mm9") {
+  txdb_gene <- genes(TxDb.Mmusculus.UCSC.mm9.knownGene) 
+} else if (genome == "mm10") {
+  txdb_gene <- genes(TxDb.Mmusculus.UCSC.mm10.knownGene) 
+}
+
+if (genome == "hg19" | genome == "hg38") {
+  orgAnn <- "org.Hs.eg.db"
+} else if (genome == "mm9" | genome == "mm10") {
+  orgAnn <- "org.Mm.eg.db"
+}
+
+
+peaks_anno_list <- lapply(overlap_unique_list, annoPeaks, annoData=txdb_gene, bindingType = "startSite", bindingRegion = c(-5000, 3000), ignore.peak.strand = TRUE)
+
+#need to filter out the objects of the list that have no ranges in them because the addGeneIDs function below will throw an error if this is the case. 
+filter_length <- lapply(peaks_anno_list, function(x) length(x) > 0) #this will create a simple list that gives either true or false depending on whether an element is empty, then I can use this to subset the original list
+filter_length <- unlist(filter_length) #need to turn this into a vector by unlisting to use it to subset.
+peaks_anno_list <- peaks_anno_list[filter_length]
+
+peaks_anno_list <- lapply(peaks_anno_list, addGeneIDs, orgAnn = orgAnn, feature_id_type="entrez_id", IDs2Add="symbol")
+
+gene_list <- lapply(peaks_anno_list, function(x) x$symbol)
+
+for (i in seq_along(gene_list)) {
+  write.table(gene_list[i], file = paste0(gene_list_path, names(gene_list)[i], ".txt"), row.names = FALSE, quote = FALSE)
+}
+
+#Gene Ontology
+
+if (gene_ontology == TRUE) {
+  
+overlap_GOlist <- as.vector(gene_list[[1]])
+
+if (genome == "hg19" | genome == "hg38") {
+  org_db <- org.Hs.eg.db
+} else if (genome == "mm9" | genome == "mm10") {
+  org_db <- org.Mm.eg.db
+}
+all_genes <- AnnotationDbi::keys(org_db, keytype = "SYMBOL")
+
+GO <- vector("list", length = length(gene_list))
+GO_int <- vector("list", length = length(gene_list))
+for (i in seq_along(gene_list)) {
+  GO[[i]] <-  all_genes  %in% gene_list[[i]] # this will return a logical vector with the genes being upregulated in both clones being "True" 
+  GO_int[[i]] <- as.integer(GO[[i]]) #True/False will be changed to 1/0
+  names(GO_int[[i]]) <- all_genes
+}
+ 
+names(GO_int) <- names(gene_list)
+
+
+pwf <- lapply(GO_int, nullp, genome,"geneSymbol")
+GO.wall <- lapply(pwf, goseq, genome, "geneSymbol")
+
+revigo_enrich <- vector("list", length = length(GO.wall))
+names(revigo_enrich) <- names(GO.wall)
+for (i in seq_along(GO.wall)) {
+  revigo_enrich[[i]] <- GO.wall[[i]][p.adjust(GO.wall[[i]]$over_represented_pvalue, method="BH")<.05, c(1,2)] #sets cutoff for p-value and only returns names of GO categories that pass threshold. Also only returns first two columns, to be inputted into REVIGO
+  #below a text file will be written that can be copied and pasted into REVIGO to get some pretty good outputs for GO analysis
+  write.table(revigo_enrich[[i]], file = paste0(GO_input_path, "revigo_", names(revigo_enrich[i]),".txt"), row.names = FALSE, quote = FALSE)
+
+    }
+}
+writeLines(capture.output(sessionInfo()), paste0(output_path, file_prefix, "_sessioninfo.txt"))
+
+}
+
+
+#tests
+
+
+input_paths <- c("../../define_peaksets/no_blacklist/from_merged_fastq/WT_HEAA_union_merge_EVremove_noBL.bed",
+                 "~/Desktop/NGS_analysis_doug/foxa1_RT4_published_study/FOXA1_RT4_ChIP/FOXA1_rep1_rep2_overlap.bed")
+file_prefix <- "WTUTX_HEAAUTX_union_merge_vs_FOXA1_RT4_intersect"
+chip_names <- c("WTUTX_HEAAUTX_union", "FOXA1_RT4_intersect")
+output_path <- ("./output/")
+genome <- "hg19"
+
+bed_overlap_unique_hg19_mm(input_paths, file_prefix, chip_names, output_path, genome, gene_ontology = FALSE)
+
+
+
+
+```

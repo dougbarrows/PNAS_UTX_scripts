@@ -1,0 +1,83 @@
+---
+title: "Untitled"
+author: "Doug Barrows"
+date: "11/8/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(DESeq2)
+library(ggplot2)
+library(dplyr)
+library(ggrepel)
+
+
+##########
+# EV sphere vs EV full
+##########
+dds <- readRDS("/Users/douglasbarrows/Desktop/allis_postdoc_all_the_things/NGS_analysis_doug/20171222_RNAseq_UMUC1_fullvssphere_analysis/UMUC1_RNASeq_FullvSphere_GIT/dds_EVspherevsEVfull.RData")
+res_EVfullvsEVsphere <- results(dds, name = "media_sphere_vs_full")
+head(res_EVfullvsEVsphere)
+
+DESeq2::plotMA(res_EVfullvsEVsphere)
+
+# add gene names, the version numbers on end of IDs are not part of data base, so need to trim these off before pulling gene names
+geneIDs <- substr(rownames(res_EVfullvsEVsphere), 1, 15)
+
+# running mapIDs
+library(org.Hs.eg.db)
+gene_symbols <- mapIds(org.Hs.eg.db, keys = geneIDs, column = "SYMBOL", keytype = "ENSEMBL", multiVals = "first")
+
+res_EVfullvsEVsphere$GeneSymbol <- gene_symbols
+res_EVfullvsEVsphere_sort <- res_EVfullvsEVsphere[order(res_EVfullvsEVsphere$stat), ]
+
+
+res_EVfullvsEVsphere_sort_df <- as.data.frame(res_EVfullvsEVsphere_sort)
+res_EVfullvsEVsphere_sort_df$abs_stat <- abs(res_EVfullvsEVsphere_sort_df$stat)
+
+# genes that mark less differentiated cells from figrue in review "Normal and neoplastic urothelial stem cells: getting to the root of the problem", by Ho et al 2012, Nat Rev Urology - Doug added krt6
+stem_genes <- c("KRT14", "KRT5", "ITGB4", "CD44", "TP63", "KRT17", "KRT6A", "KRT6B", "KRT6C")
+differentiation_genes <- c("KRT20", "KRT8", "KRT18", "UPK1A", "UPK1B", "UPK2", "UPK3A", "UPK3B")
+
+res_EVfullvsEVsphere_sort_df <- res_EVfullvsEVsphere_sort_df %>% mutate(stem_diff = ifelse(res_EVfullvsEVsphere_sort_df$GeneSymbol %in% stem_genes, yes = "stem_gene", no = ifelse(res_EVfullvsEVsphere_sort_df$GeneSymbol %in% differentiation_genes, yes = "differentiation_gene", no = "none")))
+
+res_EVfullvsEVsphere_sort_df$stem_diff <- factor(res_EVfullvsEVsphere_sort_df$stem_diff, levels = c("none", "stem_gene", "differentiation_gene"))
+levels(res_EVfullvsEVsphere_sort_df$stem_diff)
+res_EVfullvsEVsphere_sort_df <- res_EVfullvsEVsphere_sort_df[order(res_EVfullvsEVsphere_sort_df$stem_diff), ]
+
+
+# volcano plot for color for stem vs differentitaion gene 
+ggplot(data = res_EVfullvsEVsphere_sort_df, mapping = aes(x = log2FoldChange, y = abs_stat, color = stem_diff, label = GeneSymbol)) + 
+  geom_point() + 
+  geom_label_repel( data = res_EVfullvsEVsphere_sort_df[(res_EVfullvsEVsphere_sort_df$stem_diff == "stem_gene" | res_EVfullvsEVsphere_sort_df$stem_diff == "differentiation_gene"), ]) +
+  theme_bw() + 
+  scale_color_manual(values=c("#999999", "#FF0000", "#0066CC")) 
+ggsave("EVfull_vs_EV_sphere_volcano.pdf", device = "pdf", height = 8, width = 8, useDingbats=FALSE)
+
+
+# use Chan Genes (18 genes)
+basal_genes <- c("THY1", "STAT3", "JAK2", "KRT15", "EGFR", "ITGA6", "KRT14", "KRT5", "KRT17", "CD44")
+differentiation_genes <- c("UPK1B","UPK1A", "UPK3A", "UPK2", "UPK3B", "KRT20", "KRT18", "KRT8")
+
+res_EVfullvsEVsphere_sort_df <- res_EVfullvsEVsphere_sort_df %>% mutate(stem_diff = ifelse(res_EVfullvsEVsphere_sort_df$GeneSymbol %in% basal_genes, yes = "basal_gene", no = ifelse(res_EVfullvsEVsphere_sort_df$GeneSymbol %in% differentiation_genes, yes = "differentiation_gene", no = "none")))
+
+res_EVfullvsEVsphere_sort_df$stem_diff <- factor(res_EVfullvsEVsphere_sort_df$stem_diff, levels = c("none", "basal_gene", "differentiation_gene"))
+levels(res_EVfullvsEVsphere_sort_df$stem_diff)
+res_EVfullvsEVsphere_sort_df <- res_EVfullvsEVsphere_sort_df[order(res_EVfullvsEVsphere_sort_df$stem_diff), ]
+
+
+# volcano plot for color for stem vs differentitaion gene 
+ggplot(data = res_EVfullvsEVsphere_sort_df, mapping = aes(x = log2FoldChange, y = abs_stat, color = stem_diff, label = GeneSymbol)) + 
+  geom_point() + 
+  geom_label_repel( data = res_EVfullvsEVsphere_sort_df[(res_EVfullvsEVsphere_sort_df$stem_diff == "basal_gene" | res_EVfullvsEVsphere_sort_df$stem_diff == "differentiation_gene"), ]) +
+  theme_bw() + 
+  scale_color_manual(values=c("#999999", "#FF0000", "#0066CC")) 
+ggsave("EVfull_vs_EV_sphere_volcano_ChanGenes.pdf", device = "pdf", height = 8, width = 8, useDingbats=FALSE)
+  
+
+```
+

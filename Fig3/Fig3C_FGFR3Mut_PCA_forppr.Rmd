@@ -1,0 +1,255 @@
+---
+title: "Untitled"
+author: "Doug Barrows"
+date: "11/7/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+library(DESeq2)
+library(stringr)
+library(ggplot2)
+
+# read in counts table
+
+# you would do this code if you were taking result from above and not just loading the table saved previously
+#counts <- assay(data)
+#colnames(counts) <- substr(colnames(counts), 1,15)
+#saveRDS(counts, "./normalizedCounts_revisedPatientNames_TCGAbiolinks.RData")
+counts <- readRDS("../../hg19/normalizedCounts_revisedPatientNames_TCGAbiolinks.RData")
+counts <- na.omit(counts)
+# since I am doing a vst transformation below, I don't think log2 transform is also necessary
+#counts <- log2(counts + 1)
+# convert values in integers, got this copde from online
+counts <- apply (counts, c (1, 2), function (x) {
+  (as.integer(x))
+  })
+
+patient_list_path <- "../../hg19/UTX_MLL3_MLL4_PIK3CA_FGFR3.alterations_across_samples.tsv"
+
+genes <- c("KMT2C", "KMT2D", "FGFR3","KDM6A", "PIK3CA")
+  
+# this information on the patiens with these particular mutations was downloaded from cBIO portal
+patients <- read.delim(patient_list_path)
+
+# generally not all paitents that had RNA seq had a full mutational profile, so need to filter the full list from RNA seq table so it only contains patients with full mutational profile
+
+counts <- counts[ , colnames(counts) %in% patients$Sample.ID]
+
+# change the column names to only be the gene name and not the long name it is given in TCGA table
+colnames(patients)[5:ncol(patients)] <- gsub("\\..*","",colnames(patients)[5:ncol(patients)])
+
+#extract all rows for patients that have mutations in each protein (only those with mutation of homDEL, so excluding the amplifications as there were only a few and I am intersted in loss of these proteins' function)
+
+if (missing(genes)) {
+  genes <- colnames(patients)[5:ncol(patients)]
+}
+
+patients_truncate_splice_homdel <- vector("list", length = length(genes))
+for (i in seq_along(genes)) {
+  names(patients_truncate_splice_homdel)[i] <- genes[i] 
+  patients_truncate_splice_homdel[[i]] <- patients[grepl("\\*|HOMDEL|splice", patients[,colnames(patients) == genes[i]]),]
+}
+
+patients_missense <- vector("list", length = length(genes))
+for (i in seq_along(genes)) {
+  names(patients_missense)[i] <- genes[i] 
+  patients_missense[[i]] <- patients[grepl("MUT", patients[,colnames(patients) == genes[i]]),]
+  patients_missense[[i]] <- patients_missense[[i]][!(patients_missense[[i]]$Sample.ID %in% patients_truncate_splice_homdel[[i]]$Sample.ID), ]
+}
+
+# get just the patient list for tuncating and missense
+
+patient_list_truncate_splice_homdel <- vector("list", length = length(patients_truncate_splice_homdel))
+for (i in seq_along(patients_truncate_splice_homdel)){
+  patient_list_truncate_splice_homdel[[i]] <- as.character(patients_truncate_splice_homdel[[i]]$Sample.ID)
+}
+names(patient_list_truncate_splice_homdel) <- names(patients_truncate_splice_homdel)
+
+patient_list_missense <- vector("list", length = length(patients_missense))
+for (i in seq_along(patients_missense)){
+  patient_list_missense[[i]] <- as.character(patients_missense[[i]]$Sample.ID)
+}
+names(patient_list_missense) <- names(patients_missense)
+
+truncate_splice_homdel_label <- vector("list", length = length(patient_list_truncate_splice_homdel))
+for (i in seq_along(patient_list_truncate_splice_homdel)) {
+  truncate_splice_homdel_label[[i]] <- colnames(counts) %in% patient_list_truncate_splice_homdel[[i]]
+}
+names(truncate_splice_homdel_label) <- names(patient_list_truncate_splice_homdel)
+
+missense_label <- vector("list", length = length(patient_list_missense))
+for (i in seq_along(patient_list_missense)) {
+  missense_label[[i]] <- colnames(counts) %in% patient_list_missense[[i]]
+}
+names(missense_label) <- names(patient_list_missense)
+
+# label all the indexes of the patients with either WT, TSD (truncate_splice_delete), or mis (missense)
+mutant_label <- vector("list", length = length(truncate_splice_homdel_label))
+for (i in seq_along(truncate_splice_homdel_label)) {
+  for (x in seq_along(truncate_splice_homdel_label[[i]])) {
+    if (truncate_splice_homdel_label[[i]][x] == "TRUE") {
+    mutant_label[[i]][x] <- paste0(names(truncate_splice_homdel_label[i]), "tsd")
+    }
+    else if (missense_label[[i]][x] == "TRUE") {
+    mutant_label[[i]][x] <- paste0(names(truncate_splice_homdel_label[i]), "mis") # its okay this is the TSD names label, they have same names
+    }
+    else {
+    mutant_label[[i]][x] <- paste0(names(truncate_splice_homdel_label[i]), "wt")
+    }
+  }
+}
+names(mutant_label) <- names(truncate_splice_homdel_label)
+# this should match up with the numbers of alterations above for each gene
+
+lapply(mutant_label, table)
+
+# make one vector that combines all the genotypes
+genes_label <- vector(mode = "character", length = length(mutant_label[[1]]))
+for (i in seq_along(mutant_label)) {
+  if(i == 1) {
+    for (x in seq_along(mutant_label[[1]])) {
+     genes_label[x] <- paste(mutant_label[[i]][x], sep = "_")
+    }
+  }
+  else {
+    for (x in seq_along(mutant_label[[1]])) {
+     genes_label[x] <- paste(genes_label[x], mutant_label[[i]][x], sep = "_")
+    
+    }
+  }
+}
+
+genotype <- factor(genes_label)
+sample_names <- colnames(counts)
+
+
+colData <- data.frame(sample_names, genotype, stringsAsFactors = FALSE)
+colData <- na.omit(colData)
+
+genotype_table <- data.frame(table(colData$genotype))
+colnames(genotype_table) <- c("genotype", "occurances")
+# write.table(genotype_table, paste0("./",output_file_name, "/", output_file_name, "_genotype.txt"), quote = FALSE)
+
+
+
+# read in metadata that has info on the subtype classification
+library(dplyr)
+meta_data <- read.csv("../../../../metadata.csv", header = TRUE, stringsAsFactors = FALSE)
+
+cancer_type <- meta_data[ , c(1,48)]
+
+cancer_type <- cancer_type[cancer_type$Case.ID %in% substr(colnames(counts), 1, 12) ,]
+cancer_type <- cancer_type[order(match(cancer_type$Case.ID, substr(colnames(counts), 1, 12))),]
+
+#check to make sure identical
+identical(cancer_type$Case.ID, substr(colnames(counts), 1, 12))
+
+colData$mRNA_cluster <- cancer_type$mRNA.cluster
+table(colData$mRNA_cluster)
+
+# this for loop simply will make a string that matches the "wt" case for each gene to set the reference level
+for (i in seq_along(genes)) {
+  if (i == 1) {
+    ref_level <- ""
+  }
+  ifelse (i == length(genes), ref_level <- paste0(ref_level, genes[i], "wt"), ref_level <- paste0(ref_level, genes[i], "wt_"))
+}
+#colData$genotype <- relevel(colData$genotype, ref = ref_level)
+levels(colData$genotype)
+
+# add column to colData with FGFR3 mutation status
+
+colData$FGFR3mis <- NA
+for (i in seq_along(colData$genotype)) {
+if (grepl("FGFR3mis", colData$genotype[i])) {
+  colData$FGFR3mis[i] <- "FGFR3mis"
+}
+else {
+  colData$FGFR3mis[i] <- "all_others"
+}
+}
+
+##### luminal papillary only
+
+colData_lumpap <- colData[colData$mRNA_cluster ==  "Luminal_papillary" , ]
+counts_pap_only <- counts[ , colnames(counts) %in% as.character(colData_lumpap$sample_names)]
+counts_pap_average <- as.integer(rowMeans(counts_pap_only))
+identical(as.character(colData_lumpap$sample_names), colnames(counts_pap_only))
+
+dds_lumpap <- DESeqDataSetFromMatrix(countData = counts_pap_only, colData = colData_lumpap, design = ~genotype)
+vsd<- vst(dds_lumpap, blind=FALSE)
+
+
+###########
+# use the prcomp function to understand the relative contributions of each gene to each vector of the principal component
+##IMPORTANT - you need to actualyl look at the PCA plot created by this function, and not the "plotPCA" functuon above. While the plotPCA function produces a nicer PCA,and it is similar to the once by the prcomp function, they might be oriented differently, so you might mix up positive and negative values
+
+pcRes <- prcomp(t(assay(vsd)))
+class(pcRes)
+
+
+PC1_rnk <- sort(pcRes$rotation[,1], decreasing = TRUE)
+write.csv(data.frame(keyName=names(PC1_rnk), 
+                       value=PC1_rnk, 
+                       row.names=NULL), 
+            "FGFR3_mis_PCA_PC1rnk.csv",
+            quote = FALSE)
+PC2_rnk <- sort(pcRes$rotation[,2], decreasing = TRUE)
+write.csv(data.frame(keyName=names(PC2_rnk), 
+                       value=PC2_rnk, 
+                       row.names=NULL), 
+            "FGFR3_mis_PCA_PC2rnk.csv",
+            quote = FALSE)
+
+#  FGFR3 mis only
+colData(vsd)$FGFR3mis <- as.factor(colData(vsd)$FGFR3mis)
+plot(pcRes$x,
+     col=colData(vsd)$FGFR3mis,
+     pch=20,
+     cex=2)
+
+identical(row.names(colData(vsd)), row.names(pcRes$x))
+
+to_plot_pca <- data.frame(row.names = row.names(colData(vsd)),
+                          PC1 = pcRes$x[,1],
+                          PC2 = pcRes$x[,2],
+                          FGFR3_mut = colData(vsd)$FGFR3mis)
+
+ggplot(to_plot_pca, aes(x = PC1, y = PC2, color = FGFR3_mut)) + 
+  geom_point(size = 3) + 
+  scale_color_manual(values=c("#999999", "red")) + 
+  theme_bw() + 
+  theme(axis.title=element_text(size=14))
+ggsave("FGFR3mut_PCAplot_ggplot.pdf", device = "pdf", height = 5, width = 7, useDingbats=FALSE)
+
+# chan genes for PC2
+chan_basal <- c("THY1", "STAT3", "JAK2", "KRT15", "EGFR", "ITGA6", "KRT14", "KRT5", "KRT17", "CD44")
+chan_diff <- c("UPK1B", "UPK1A", "UPK3A", "UPK2", "UPK3B", "KRT20", "KRT18", "KRT8")
+PC2_chan_basal <- PC2_rnk[names(PC2_rnk) %in% chan_basal]
+writeLines(text = capture.output(t.test(PC2_chan_basal)), con = "basal_oneSample_ttest.txt") # one sample ttest to determine if different from zero
+PC2_chan_basal_df <- data.frame(gene = names(PC2_chan_basal), PC2_score = PC2_chan_basal, type = rep('basal', length(PC2_chan_basal)))
+
+PC2_chan_diff <- PC2_rnk[names(PC2_rnk) %in% chan_diff]
+writeLines(text = capture.output(t.test(PC2_chan_diff)), con = "diff_oneSample_ttest.txt") # one sample ttest to determine if different from zero
+PC2_chan_diff_df <- data.frame(gene = names(PC2_chan_diff), PC2_score = PC2_chan_diff, type = rep('differentiated', length(PC2_chan_diff)))
+
+PC2_chan_combined <- rbind(PC2_chan_basal_df, PC2_chan_diff_df)
+PC2_chan_combined$type <- ordered(PC2_chan_combined$type, levels = c("differentiated", "basal"))
+
+
+
+ggplot(PC2_chan_combined, aes(x = type, y = PC2_score, fill = type)) + 
+  geom_boxplot() + 
+  scale_fill_manual(values=c("#CCE5FF", "#FF9999")) +
+  theme_bw() 
+ggsave("PC2_basal_vs_diff_ChanGenes_ggplot.pdf", device = "pdf", height = 5, width = 5, useDingbats=FALSE)
+
+writeLines("session_info.txt", text = capture.output(sessionInfo()))
+```
+
