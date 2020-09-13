@@ -78,6 +78,6 @@ ggplot(data = res_EVfullvsEVsphere_sort_df, mapping = aes(x = log2FoldChange, y 
   scale_color_manual(values=c("#999999", "#FF0000", "#0066CC")) 
 ggsave("EVfull_vs_EV_sphere_volcano_ChanGenes.pdf", device = "pdf", height = 8, width = 8, useDingbats=FALSE)
   
-
+writeLines(capture.output(sessionInfo()), "Fig2A_volcano_plot_EV_fullvSphere_sessioninfo.txt")
 ```
 

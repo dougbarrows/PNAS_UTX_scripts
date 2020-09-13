@@ -21,7 +21,7 @@ library(ggplot2)
 #counts <- assay(data)
 #colnames(counts) <- substr(colnames(counts), 1,15)
 #saveRDS(counts, "./normalizedCounts_revisedPatientNames_TCGAbiolinks.RData")
-counts <- readRDS("../../hg19/normalizedCounts_revisedPatientNames_TCGAbiolinks.RData")
+counts <- readRDS("/Volumes/shared_folder_20200225/from Allis_sharedrive/20200824_migrate/Data/TCGA_BLCA_updated2017/TCGA_2017_bladder_git_20180320/ANALYSES_TCGAbiolinks_hg19/hg19/normalizedCounts_revisedPatientNames_TCGAbiolinks.RData")
 counts <- na.omit(counts)
 # since I am doing a vst transformation below, I don't think log2 transform is also necessary
 #counts <- log2(counts + 1)
@@ -30,7 +30,7 @@ counts <- apply (counts, c (1, 2), function (x) {
   (as.integer(x))
   })
 
-patient_list_path <- "../../hg19/UTX_MLL3_MLL4_PIK3CA_FGFR3.alterations_across_samples.tsv"
+patient_list_path <- "/Volumes/shared_folder_20200225/from Allis_sharedrive/20200824_migrate/Data/TCGA_BLCA_updated2017/TCGA_2017_bladder_git_20180320/ANALYSES_TCGAbiolinks_hg19/hg19/UTX_MLL3_MLL4_PIK3CA_FGFR3.alterations_across_samples.tsv"
 
 genes <- c("KMT2C", "KMT2D", "FGFR3","KDM6A", "PIK3CA")
   
@@ -140,7 +140,7 @@ colnames(genotype_table) <- c("genotype", "occurances")
 
 # read in metadata that has info on the subtype classification
 library(dplyr)
-meta_data <- read.csv("../../../../metadata.csv", header = TRUE, stringsAsFactors = FALSE)
+meta_data <- read.csv("/Volumes/shared_folder_20200225/from Allis_sharedrive/20200824_migrate/Data/TCGA_BLCA_updated2017/metadata.csv", header = TRUE, stringsAsFactors = FALSE)
 
 cancer_type <- meta_data[ , c(1,48)]
 
@@ -250,6 +250,6 @@ ggplot(PC2_chan_combined, aes(x = type, y = PC2_score, fill = type)) +
   theme_bw() 
 ggsave("PC2_basal_vs_diff_ChanGenes_ggplot.pdf", device = "pdf", height = 5, width = 5, useDingbats=FALSE)
 
-writeLines("session_info.txt", text = capture.output(sessionInfo()))
+writeLines("Fig3C_FGFR3Mut_PCA_forppr_session_info.txt", text = capture.output(sessionInfo()))
 ```
 

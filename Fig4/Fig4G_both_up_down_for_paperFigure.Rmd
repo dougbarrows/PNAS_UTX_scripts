@@ -15,10 +15,10 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r}
 
-S249vWTFGFR3_down_1.5fold <- read.table("../../../S249EV_v_WTFGFR3EV_LCF1.5_downgenes.txt", stringsAsFactors = FALSE) %>%
+S249vWTFGFR3_down_1.5fold <- read.table("S249EV_v_WTFGFR3EV_LCF1.5_downgenes.txt", stringsAsFactors = FALSE) %>%
   .[,1]
 
-S249vWTFGFR3_up_1.5fold <- read.table("../../../S249EV_v_WTFGFR3EV_LCF1.5_upgenes.txt", stringsAsFactors = FALSE) %>%
+S249vWTFGFR3_up_1.5fold <- read.table("S249EV_v_WTFGFR3EV_LCF1.5_upgenes.txt", stringsAsFactors = FALSE) %>%
   .[,1]
 ```
 
@@ -26,7 +26,7 @@ S249vWTFGFR3_up_1.5fold <- read.table("../../../S249EV_v_WTFGFR3EV_LCF1.5_upgene
 ```{r}
 
 library(DESeq2)
-dds_allsamples <- readRDS("../../../dds_S249EV_as_ref.RData")
+dds_allsamples <- readRDS("dds_S249EV_as_ref.RData")
 dds_allsamples <- estimateSizeFactors(dds_allsamples)
 counts_all_samples <- counts(dds_allsamples, normalized=T)
 
@@ -63,47 +63,6 @@ colnames(counts_all_samples_norm_df)[2] <- "EV_EV"
 
 ```
 
-#GSVA
-```{r}
-library(GSVA)
-
-gene_lists <- list(down = S249vWTFGFR3_down_1.5fold,
-                  up = S249vWTFGFR3_up_1.5fold)
-
-counts_all_samples_norm_SymRowName <- counts_all_samples_norm_df
-counts_all_samples_norm_SymRowName <- counts_all_samples_norm_SymRowName[!duplicated(counts_all_samples_norm_SymRowName$GeneName), ]
-counts_all_samples_norm_SymRowName <- counts_all_samples_norm_SymRowName[!is.na(counts_all_samples_norm_SymRowName$GeneName), ]
-rownames(counts_all_samples_norm_SymRowName) <- counts_all_samples_norm_SymRowName$GeneName
-counts_all_samples_norm_SymRowName <- dplyr::select(counts_all_samples_norm_SymRowName, -GeneName)
-counts_all_samples_norm_SymRowName_mat <- as.matrix(counts_all_samples_norm_SymRowName)
-
-gsva_up_down <- gsva(counts_all_samples_norm_SymRowName_mat, 
-                 gene_lists, 
-                 min.sz=5, 
-                 max.sz=500, 
-                 kcdf="Poisson", 
-                 mx.diff=TRUE, 
-                 verbose=FALSE, 
-                 parallel.sz=1)
-
-# use log2 counts 
-
-counts_all_samples_norm_SymRowName_mat_log2 <- log2(counts_all_samples_norm_SymRowName_mat)
-
-gsva_up_down_log <- gsva(counts_all_samples_norm_SymRowName_mat, 
-                 gene_lists, 
-                 min.sz=5, 
-                 max.sz=500, 
-                 #kcdf="Poisson",  # log data should be gaussian. not poisson
-                 mx.diff=TRUE, 
-                 verbose=FALSE, 
-                 parallel.sz=1)
-
-library(pheatmap)
-pheatmap(gsva_up_down_log, cluster_cols = FALSE)
-pheatmap(gsva_up_down_log[ , 3:6], cluster_cols = FALSE) # no EV
-
-```
 
 # select genes that go up and down, log transform
 ```{r}
@@ -129,20 +88,6 @@ counts_norm_upin249C_mat_log2 <- counts_norm_upin249C_mat_log2[is.finite(rowSums
 counts_UpandDown <- rbind(counts_norm_downinS249C_mat_log2, counts_norm_upin249C_mat_log2)
 ```
 
-# make heatmap from this matrix of log counts
-
-```{r}
-library(pheatmap)
-pheatmap(counts_norm_downinS249C_mat_log2, cluster_cols = FALSE, scale = "row")
-pheatmap(counts_norm_upin249C_mat_log2, cluster_cols = FALSE, scale = "row")
-
-# no ev
-
-pdf("")
-pheatmap(counts_norm_downinS249C_mat_log2[ , 3:6], cluster_cols = FALSE, scale = "row")
-pheatmap(counts_norm_upin249C_mat_log2[ , 3:6], cluster_cols = FALSE, scale = "row")
-
-```
 
 
 ```{r}
@@ -200,6 +145,8 @@ ggplot(counts_UpandDown_scaled_long, mapping = aes(x = sample, y = zscore, fill 
   xlab("") + 
   ylab("zscore of log2(normalized read count)")
 ggsave("up_and_down_S249vsWTFGFR3_LFC1.5_forpaper.pdf", device = "pdf", height = 5, width = 7, useDingbats=FALSE)
+
+writeLines("Fig4G_both_up_down_for_paperFigure_session_info.txt", text = capture.output(sessionInfo()))
 ```
 
 

@@ -12,7 +12,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 library(DESeq2)
 ###### we will define our gene set by those genes that change in FGFR3 mutant tumors, without considering UTX status
-dds <- readRDS("../../../../../../20181008_FGFR3AMP_vs_mut_lumpap/FGFR3_AMPvMUT_lumpap/FGFR3_AMPvMUT_lumpap_2_dds.RData")
+dds <- readRDS("/Users/douglasbarrows/Desktop/allis_postdoc_all_the_things/Presentations_LabMetings_papers/UTX_paper/PNAS_UTX_scripts/Fig4/FGFR3_AMPvMUT_lumpap/FGFR3_AMPvMUT_lumpap_dds.RData")
 resultsNames(dds)
 dds <- estimateSizeFactors(dds)
 counts <- as.data.frame(counts(dds, normalized=TRUE))
@@ -34,7 +34,7 @@ down_genes <- rownames(FGFR3mut_DE_padj0.01_L2FC2[FGFR3mut_DE_padj0.01_L2FC2$UP_
 
 # now we have our list of genes that we are interested in, we have to labels all of the patietns based on the mutation status of all the proteins we will use in the heatmap
 
-patient_list_path <- "../../../../../../alterations_across_samples _FGFR3_UTX_MLL3_4_TCGA2017.tsv"
+patient_list_path <- "/Volumes/shared_folder_20200225/from Allis_sharedrive/20200824_migrate/Data/TCGA_BLCA_updated2017/TCGA_2017_bladder_git_20180320/ANALYSES_TCGAbiolinks_hg19/hg19/alterations_across_samples _FGFR3_UTX_MLL3_4_TCGA2017.tsv"
 genes <-  c("KDM6A", "KMT2C", "KMT2D", "FGFR3")
 
 # this information on the patiens with these particular mutations was downloaded from cBIO portal
@@ -99,7 +99,7 @@ counts_heat <- counts + 1
 counts_heat <- log2(counts_heat)
 
 library(dplyr)
-meta_data <- read.csv("../../../../../../../../../metadata.csv", header = TRUE, stringsAsFactors = FALSE)
+meta_data <- read.csv("/Volumes/shared_folder_20200225/from Allis_sharedrive/20200824_migrate/Data/TCGA_BLCA_updated2017/metadata.csv", header = TRUE, stringsAsFactors = FALSE)
 
 all_lumpap_tumors <- filter(meta_data, (mRNA.cluster == "Luminal_papillary")) %>% dplyr::select(Case.ID)
 counts <- counts[ , substr(colnames(counts), 1, 12) %in% all_lumpap_tumors$Case.ID]
@@ -324,13 +324,13 @@ mean(mean_topFGFR3_lumpap_zscores_upinFGFRmut[,4]) # FGFR3mis_UTXMLLdble
 ttest <- t.test(mean_topFGFR3_lumpap_zscores_upinFGFRmut$FGFR3mis_UTXwt, mean_topFGFR3_lumpap_zscores_upinFGFRmut$FGFR3mis_UTXtsd)
 
 ttest_output <- capture.output(print(ttest))
-writeLines(ttest_output, con = file("./separate_basedon_FGFR3mutvsAMP_UTXonly/ttest_FGFR3mis_wtVS_FGFR3mis_UTXtsd_up.txt"))
+writeLines(ttest_output, con = file("ttest_FGFR3mis_wtVS_FGFR3mis_UTXtsd_up.txt"))
 
 # wilcox
 wilcox_up <- wilcox.test(mean_topFGFR3_lumpap_zscores_upinFGFRmut$FGFR3mis_UTXwt, mean_topFGFR3_lumpap_zscores_upinFGFRmut$FGFR3mis_UTXtsd)
 
 wilcox_up_output <- capture.output(print(wilcox_up))
-writeLines(wilcox_up_output, con = file("./separate_basedon_FGFR3mutvsAMP_UTXonly/wilcox_FGFR3mis_wtVS_FGFR3mis_UTXtsd_up.txt"))
+writeLines(wilcox_up_output, con = file("wilcox_FGFR3mis_wtVS_FGFR3mis_UTXtsd_up.txt"))
 
 
 # plot the data
@@ -341,7 +341,7 @@ upinFGFRmut_toplot <- gather(mean_topFGFR3_lumpap_zscores_upinFGFRmut, key = gen
 upinFGFRmut_toplot$genotype <- ordered(upinFGFRmut_toplot$genotype, levels = c("WT", "FGFR3wt_UTXtsd", "FGFR3mis_UTXwt", "FGFR3mis_UTXtsd"))
 ggplot(upinFGFRmut_toplot, mapping = aes(x = genotype, y = zscore)) + 
   geom_boxplot()
-#ggsave("./separate_basedon_FGFR3mutvsAMP_UTXonly/UTXonly_UPin_FGFR3misvsAMP_p0.0005.pdf", device = "pdf", height = 5, width = 7)
+#ggsave("UTXonly_UPin_FGFR3misvsAMP_p0.0005.pdf", device = "pdf", height = 5, width = 7)
 
 #pick out hte genes that go down in the FGFR3 mutant tumors and get their average z scores
 mean_topFGFR3_lumpap_zscores_downinFGFRmut <- mean_topFGFR3_lumpap_zscores[rownames(mean_topFGFR3_lumpap_zscores) %in% down_genes, ]
@@ -355,18 +355,18 @@ mean(mean_topFGFR3_lumpap_zscores_downinFGFRmut[,4])# FGFR3mis_UTXMLLdble
 ttest <- t.test(mean_topFGFR3_lumpap_zscores_downinFGFRmut$FGFR3mis_UTXwt, mean_topFGFR3_lumpap_zscores_downinFGFRmut$FGFR3mis_UTXtsd)
 
 ttest_output <- capture.output(print(ttest))
-writeLines(ttest_output, con = file("./separate_basedon_FGFR3mutvsAMP_UTXonly//ttest_FGFR3mis_wtVS_FGFR3mis_UTXtsd_noMLL_down.txt"))
+writeLines(ttest_output, con = file("ttest_FGFR3mis_wtVS_FGFR3mis_UTXtsd_noMLL_down.txt"))
 
 # wilcox rank sum
 wilcox <- wilcox.test(mean_topFGFR3_lumpap_zscores_downinFGFRmut$FGFR3mis_UTXwt, mean_topFGFR3_lumpap_zscores_downinFGFRmut$FGFR3mis_UTXtsd)
 
-writeLines(text = capture.output(wilcox), con = file("./separate_basedon_FGFR3mutvsAMP_UTXonly//wilcox_FGFR3mis_wtVS_FGFR3mis_UTXtsd_noMLL_down.txt"))
+writeLines(text = capture.output(wilcox), con = file("wilcox_FGFR3mis_wtVS_FGFR3mis_UTXtsd_noMLL_down.txt"))
 
 #plot these data
 downinFGFRmut_toplot <- gather(mean_topFGFR3_lumpap_zscores_downinFGFRmut, key = genotype, value = zscore, WT:FGFR3mis_UTXtsd)
 downinFGFRmut_toplot$genotype <- ordered(downinFGFRmut_toplot$genotype, levels = c("WT", "FGFR3wt_UTXtsd", "FGFR3mis_UTXwt", "FGFR3mis_UTXtsd"))
 ggplot(downinFGFRmut_toplot, mapping = aes(x = genotype, y = zscore)) + geom_boxplot()
-ggsave("./separate_basedon_FGFR3mutvsAMP_UTXonly//UTXonly_noMLL_downin_FGFR3misvsAMP_p0.0005.pdf", device = "pdf", height = 5, width = 7)
+ggsave("UTXonly_noMLL_downin_FGFR3misvsAMP_p0.0005.pdf", device = "pdf", height = 5, width = 7)
 
 
 ##### make one plot with both up and down!
@@ -388,8 +388,8 @@ ggplot(allUPdown_toplot, mapping = aes(x = genotype, y = zscore, fill = up_down)
         strip.text.x = element_text(colour = "black", face = "bold")) + 
   xlab("") + 
   ylab("zscore of log2(TPM gene)")
-ggsave("./separate_basedon_FGFR3mutvsAMP_UTXonly//UTXonly_noMLL_UPandDOWN_FGFR3misvsAMP_p0.0005.pdf", device = "pdf", height = 5, width = 7, useDingbats=FALSE)
+ggsave("UTXonly_noMLL_UPandDOWN_FGFR3misvsAMP_p0.0005.pdf", device = "pdf", height = 5, width = 7, useDingbats=FALSE)
 
 
-writeLines(con = paste("./separate_basedon_FGFR3mutvsAMP_UTXonly/sessionInfo.txt"), text = capture.output(sessionInfo()))
+writeLines(con = paste("Fig4B_20190212_heatmap_UTXonly_noMLL_lumpap_408p_p0005_sessionInfo.txt"), text = capture.output(sessionInfo()))
 ```

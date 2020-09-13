@@ -19,7 +19,7 @@ sampleData(UTX_K27ac_all_UTX_union_pp)$chip <- c(rep("UTX", 6), rep("K27ac", 6))
 
 UTX_K27ac_all_UTX_union_pp_anno <- annotateRanges_great(UTX_K27ac_all_UTX_union_pp, species = "hg19")
 
-all_enh <- import("~/Desktop/NGS_analysis_doug/ChIPseq_pipeline_FullVsSphereK27ac_UTX_MNase_20190328/beds_removeblacklist/K27ac_K4me1_overlap_EV_WT_HEAA_union_inclProm.bed")
+all_enh <- import("~/Desktop/allis_postdoc_all_the_things/NGS_analysis_doug/ChIPseq_pipeline_FullVsSphereK27ac_UTX_MNase_20190328/beds_removeblacklist/K27ac_K4me1_overlap_EV_WT_HEAA_union_inclProm.bed")
 
 UTX_K27ac_all_UTX_union_pp_anno <- groupBy(UTX_K27ac_all_UTX_union_pp_anno,
                                            all_enh,
@@ -209,7 +209,7 @@ writeLines(con = "allDownGenes_sphere_wilcox_pvalues_vsEVsphere.txt",
            text = c(capture.output(WT_vs_EV_sph),
                     capture.output(HEAA_vs_EV_sph)))
 
-writeLines(con = paste("sessionInfo.txt"), text = capture.output(sessionInfo()))
+writeLines(con = "Fig2B_UTX_EV_WT_andHEAA_enhancers_Gene_overlap_geneexpression_sessionInfo.txt", text = capture.output(sessionInfo()))
 
 ```
 

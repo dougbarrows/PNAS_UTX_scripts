@@ -32,7 +32,7 @@ tx2gene <- res[,2:1] #this will show a list that has one column with the transcr
 head(tx2gene)
 
 
-samplenames <- list.files("../salmon_analysis_1.1.0_NOTtrimmed/quant_../fastq_files/quant_files/") #this is the directory with my Salmon outputs and I wirte their names into a vector 
+samplenames <- list.files("/Users/douglasbarrows/Desktop/allis_postdoc_all_the_things/NGS_analysis_doug/FGFR3_UTX_coexpress_RNAseq/salmon_analysis_1.1.0_NOTtrimmed/quant_../fastq_files/quant_files") #this is the directory with my Salmon outputs and I wirte their names into a vector 
 
 # differential expression between DMSO and MI503 
 cell_line <- c(rep("EV_EV", 3), rep("EV_UTX", 3), rep("S249C_EV", 3), rep("S249C_UTX", 3), rep("WTFGFR3_EV", 3), rep("WTFGFR3_UTX", 3))
@@ -40,7 +40,7 @@ FGFR3_status <- c(rep("EV", 6), rep("S249C", 6), rep("WTFGFR3", 6))
 colData <- data.frame(samplenames, cell_line, FGFR3_status)
 
 #We have used the run ID (SRR...) to keep track of the reads and quantifications, so we can build a vector which points to our quantification files using this column of coldata. We use names to name this vector with the run IDs as well.
-files_quant <- file.path("../salmon_analysis_1.1.0_NOTtrimmed//quant_../fastq_files/quant_files/",colData$samplenames)
+files_quant <- file.path("/Users/douglasbarrows/Desktop/allis_postdoc_all_the_things/NGS_analysis_doug/FGFR3_UTX_coexpress_RNAseq/salmon_analysis_1.1.0_NOTtrimmed/quant_../fastq_files/quant_files",colData$samplenames)
 names(files_quant) <- colData$samplenames
 head(files_quant,2)
 
@@ -285,22 +285,6 @@ write.table(res_S249C_EV_vs_WTFGFR3_EV_sort_df_up_allP05,
 
 
 
-##########
-# look at correlation of genes that change in WTFGFR3 + UTX vs those that change in S249 vs WTGFR3
-corr_table <- merge(S249C_EV_vs_WTFGFR3_EV_rnk, WTFGFR3_UTX_vs_WTFGFR3_EV_rnk, by = 1)
-colnames(corr_table) = c("gene","S249vWTFGFR3", "UTXvsEV_WTFGFR3")
-corr_table[corr_table$gene %in% c("UPK1B", "UPK2", "UPK3B"),]
-
-plot(corr_table$S249vWTFGFR3, corr_table$UTXvsEV_WTFGFR3)
-
-S249alldown_vWT_AllEnh_UTXpeaks_Overlap <- read.table("S249C_dependentGenes_analysis/UTX_enh_overlap_analysis/S249vWTFGFR3/genes_down_with_S249C/down_all_P05/S249alldown_vWT_AllEnh_UTXpeaks_Overlap.txt", stringsAsFactors = F) %>%
-  .[,1]
-
-corr_table$UTXenhPeak_S249down_ov <- ifelse(corr_table$gene %in% S249alldown_vWT_AllEnh_UTXpeaks_Overlap, "UTX_enh", "no_ov")
-
-ggplot(corr_table, aes(x = S249vWTFGFR3, y = UTXvsEV_WTFGFR3, color = UTXenhPeak_S249down_ov)) + geom_point()
-
-#########
 ```
 
 #DE analysis of all samples vs 249_EV
@@ -368,44 +352,12 @@ rownames(S249C_UTX_vs_S249C_EV_sort_rnk) <- NULL
 # filter to those genes that go down in WT vs S249
 res_S249C_UTX_vs_S249C_EV_sort_df_downgenesWT <- dplyr::filter(res_S249C_UTX_vs_S249C_EV_sort_df, GeneSymbol %in% res_S249C_EV_vs_WTFGFR3_EV_sort_genes_down)
 
-# filter to those genes that go down in EV vs S249
-res_S249C_UTX_vs_S249C_EV_sort_df_downgenesEV <- dplyr::filter(res_S249C_UTX_vs_S249C_EV_sort_df, GeneSymbol %in% res_S249C_EV_vs_EV_EV_sort_genes_down)
 
 S249C_UTX_vs_S249C_EV_rnk <- res_S249C_UTX_vs_S249C_EV_sort[, c(7,4)] %>%
   as.data.frame()
 
-##########
-# look at correlation of genes that change in S249 + UTX vs those that change in S249 vs WTGFR3
-corr_table <- merge(S249C_EV_vs_WTFGFR3_EV_rnk, S249C_UTX_vs_S249C_EV_rnk, by = 1)
-colnames(corr_table) = c("gene","S249vWTFGFR3", "UTXvsEV_S249FGFR3")
-corr_table[corr_table$gene %in% c("UPK1B", "UPK2", "UPK3B"),]
 
-plot(corr_table$S249vWTFGFR3, corr_table$UTXvsEV_S249FGFR3)
-cor(corr_table$S249vWTFGFR3, corr_table$UTXvsEV_S249FGFR3)
-
-S249alldown_vWT_AllEnh_UTXpeaks_Overlap <- read.table("S249C_dependentGenes_analysis/UTX_enh_overlap_analysis/S249vWTFGFR3/genes_down_with_S249C/down_all_P05/S249alldown_vWT_AllEnh_UTXpeaks_Overlap.txt", stringsAsFactors = F) %>%
-  .[,1]
-
-corr_table$UTXenhPeak_S249down_ov <- ifelse(corr_table$gene %in% S249alldown_vWT_AllEnh_UTXpeaks_Overlap, "UTX_enh", "no_ov")
-
-# for (i in 1:nrow(corr_table)){
-#   if ((corr_table[i,1] > 5 | corr_table[i,1] < -5) & (corr_table[i,2] > 5 | corr_table[i,2] < -5)){
-#     corr_table$big_change <- "stat_high"
-#   } else {
-#     corr_table$big_change <- "stat_low"
-#   }
-# }
-library(ggpmisc)
-ggplot(corr_table, aes(x = S249vWTFGFR3, 
-                       y = UTXvsEV_S249FGFR3
-                       )) + 
-  geom_point(color='blue') +
-  geom_smooth(method='lm', formula= y~x, color = "black") +
-  stat_poly_eq(formula = y~x, 
-                aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~")), 
-                parse = TRUE) 
-
-ggsave("UTXvEV_S249vWTFGFR3_correlate.pdf", useDingbats=FALSE)
+writeLines("Fig4G_FGFR3_UTX_coexpress_rnaseq_NOTtrimmed_session_info.txt", text = capture.output(sessionInfo()))
 
 #########
 ```

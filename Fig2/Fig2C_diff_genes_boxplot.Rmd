@@ -23,7 +23,7 @@ library(GenomicFeatures)
 # txdb <- makeTxDbFromGFF("gencode.vh27.annotation.gtf.gz")
 # saveDb(txdb, file="gencode.vh27.sqlite")
 # next time you can just load with this line (no need to makeTxDb...)
-txdb <- loadDb("../../gencode.vh27.sqlite") 
+txdb <- loadDb("/Users/douglasbarrows/Desktop/allis_postdoc_all_the_things/NGS_analysis_doug/20171222_RNAseq_UMUC1_fullvssphere_analysis/gencode.vh27.sqlite") 
 columns(txdb)
 k <- keys(txdb, "GENEID")
 res <- AnnotationDbi::select(txdb, k, "TXNAME", "GENEID") #for every gene, tell me the transcripts that are associated with it
@@ -32,7 +32,7 @@ tx2gene <- res[,2:1] #this will show a list that has one column with the transcr
 head(tx2gene)
 
 
-samplenames <- list.files("../../salmon_analysis_v0.8.2/quants_for_DESeq/") #this is the directory with my Salmon outputs and I wirte their names into a vector 
+samplenames <- list.files("/Users/douglasbarrows/Desktop/allis_postdoc_all_the_things/NGS_analysis_doug/20171222_RNAseq_UMUC1_fullvssphere_analysis/salmon_analysis_v0.8.2/quants_for_DESeq") #this is the directory with my Salmon outputs and I wirte their names into a vector 
 
 samplenames <- samplenames[c(1:6, 13:18, 7:12)]
 
@@ -42,7 +42,7 @@ cell_line <- c(rep("EV", 6), rep("WT_UTX", 6), rep("HEAA_UTX", 6))
 colData <- data.frame(samplenames, media, cell_line)
 
 #We have used the run ID (SRR...) to keep track of the reads and quantifications, so we can build a vector which points to our quantification files using this column of coldata. We use names to name this vector with the run IDs as well.
-files_quant <- file.path("../..//salmon_analysis_v0.8.2/quants_for_DESeq/",colData$samplenames)
+files_quant <- file.path("/Users/douglasbarrows/Desktop/allis_postdoc_all_the_things/NGS_analysis_doug/20171222_RNAseq_UMUC1_fullvssphere_analysis/salmon_analysis_v0.8.2/quants_for_DESeq",colData$samplenames)
 names(files_quant) <- colData$samplenames
 head(files_quant,2)
 
@@ -65,7 +65,7 @@ vsd <- vst(dds, blind=FALSE)
 library(ggplot2)
 
 pcaData <- plotPCA(vsd, intgroup = c("media","cell_line"), returnData=TRUE)
-pcaData$cell_line_media <- paste(all_samples_diffstem_genes$cell_line, all_samples_diffstem_genes$media, sep = "_")
+pcaData$cell_line_media <- paste(cell_line, media, sep = "_")
 pcaData$cell_line_media <- factor(pcaData$cell_line_media, levels = c("EV_full", "WT_UTX_full", "HEAA_UTX_full", "EV_sphere", "WT_UTX_sphere", "HEAA_UTX_sphere"))
 percentVar <- round(100 * attr(pcaData, "percentVar"))
 ggplot(pcaData, aes(PC1, PC2, color=cell_line_media)) +
@@ -116,7 +116,7 @@ write.table(dds_norm_df, "normalized_counts_table_allSamples.csv", sep = ",")
 ##########
 # STEM and Differentiation Genes
 ##########
-
+library(magrittr)
 options(scipen=999)
 dds_norm_df <- read.delim("normalized_counts_table_allSamples.csv", sep = ",")
 all_samples_counts_norm <- dds_norm_df
@@ -264,35 +264,6 @@ writeLines(con = "UPKs_pvalues_WT_HA_vs_EV_full.txt",
 # MAKE PLOTS
 
 
-###### just EV_full and all sphere
-
-all_samples_diffstem_genes$cell_line_media <- paste(all_samples_diffstem_genes$cell_line, all_samples_diffstem_genes$media, sep = "_")
-all_samples_diffstem_genes_gather <- all_samples_diffstem_genes %>% gather(key = "Gene_Name", value = "Expression", CD44:UPK3B)
-sum_error <- summarySE(all_samples_diffstem_genes_gather, measurevar="Expression", groupvars=c("cell_line_media", "Gene_Name"), na.rm = FALSE)
-sum_error_EVfull_allsphere <- sum_error[grepl("EV|sphere", sum_error$cell_line_media) ,]
-
-sum_error_EVfull_allsphere$Gene_Name <- factor(sum_error_EVfull_allsphere$Gene_Name, levels = c("CD44", "TP63", "KRT17", "KRT5", "KRT6A", "KRT6B", "KRT6C", "UPK1B", "UPK2", "UPK3B","UPK3A", "KRT8", "KRT18"))
-sum_error_EVfull_allsphere$cell_line_media <- factor(sum_error_EVfull_allsphere$cell_line_media, levels = c("EV_full", "EV_sphere", "WT_UTX_sphere", "HEAA_UTX_sphere"))
-
-sum_error_EVfull_allsphere_stem <- sum_error_EVfull_allsphere[sum_error_EVfull_allsphere$Gene_Name %in% c("CD44", "TP63", "KRT17","KRT5", "KRT6A", "KRT6B", "KRT6C"),]
-sum_error_EVfull_allsphere_stem$cell_line_media <- factor(sum_error_EVfull_allsphere_stem$cell_line_media, levels = c("EV_full", "EV_sphere", "WT_UTX_sphere", "HEAA_UTX_sphere"))
-sum_error_EVfull_allsphere_diff <- sum_error_EVfull_allsphere[sum_error_EVfull_allsphere$Gene_Name %in% c("UPK1B", "UPK2", "UPK3B", "UPK3A", "KRT8", "KRT18"),]
-sum_error_EVfull_allsphere_diff$cell_line_media <- factor(sum_error_EVfull_allsphere_diff$cell_line_media, levels = c("EV_full", "EV_sphere", "WT_UTX_sphere", "HEAA_UTX_sphere"))
-
-library(ggplot2)
-
-ggplot(data = sum_error_EVfull_allsphere, mapping = aes(x = cell_line_media, y = Expression, fill = cell_line_media)) + geom_bar( stat = "identity", position = "dodge") + geom_errorbar(aes(ymin = Expression - se, ymax = Expression + se), position = "dodge") + facet_wrap(~Gene_Name, scales = "free") + theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank(), strip.text = element_text(face="bold", size=12))
-
-ggplot(data = sum_error_EVfull_allsphere_stem, mapping = aes(x = cell_line_media, y = Expression, fill = cell_line_media)) + geom_bar( stat = "identity", position = "dodge") + geom_errorbar(aes(ymin = Expression - se, ymax = Expression + se), position = "dodge") + facet_wrap(~Gene_Name, scales = "free") + theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank())
-
-ggplot(data = sum_error_EVfull_allsphere_diff, mapping = aes(x = cell_line_media, y = Expression, fill = cell_line_media)) + 
-  geom_bar( stat = "identity", position = "dodge") + 
-  geom_errorbar(aes(ymin = Expression - se, ymax = Expression + se), position = "dodge") + facet_wrap(~Gene_Name, scales = "free", nrow = 2) + 
-  theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank()) + 
-  scale_fill_manual(values=c("#99CCFF", "#FF9999", "#990000", "#990000"))
-ggsave("diff_genes_boxplot_EVfull_allsphere.pdf", device = "pdf", height = 5, width = 8)
-
-
 ##### all full and sphere samples
 
 all_samples_diffstem_genes$cell_line_media <- paste(all_samples_diffstem_genes$cell_line, all_samples_diffstem_genes$media, sep = "_")
@@ -309,10 +280,6 @@ sum_error_allsamples_diff$cell_line_media <- factor(sum_error_allsamples_diff$ce
 
 library(ggplot2)
 
-ggplot(data = sum_error_allsamples, mapping = aes(x = cell_line_media, y = Expression, fill = cell_line_media)) + geom_bar( stat = "identity", position = "dodge") + geom_errorbar(aes(ymin = Expression - se, ymax = Expression + se), position = "dodge") + facet_wrap(~Gene_Name, scales = "free") + theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank(), strip.text = element_text(face="bold", size=12))
-
-ggplot(data = sum_error_allsamples_stem, mapping = aes(x = cell_line_media, y = Expression, fill = cell_line_media)) + geom_bar( stat = "identity", position = "dodge") + geom_errorbar(aes(ymin = Expression - se, ymax = Expression + se), position = "dodge") + facet_wrap(~Gene_Name, scales = "free") + theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank())
-
 ggplot(data = sum_error_allsamples_diff, mapping = aes(x = cell_line_media, y = Expression, fill = cell_line_media)) + 
   geom_bar( stat = "identity", position = "dodge") + 
   geom_errorbar(aes(ymin = Expression - se, ymax = Expression + se), position = "dodge") + 
@@ -323,6 +290,7 @@ ggplot(data = sum_error_allsamples_diff, mapping = aes(x = cell_line_media, y = 
   scale_y_continuous(expand = expand_scale(mult = c(0, .2)))
 ggsave("diff_genes_boxplot_allsamples.pdf", device = "pdf", height = 5, width = 8)
 
+writeLines(con = "Fig2C_diff_genes_boxplot_sessionInfo.txt", text = capture.output(sessionInfo()))
 
 ```
 

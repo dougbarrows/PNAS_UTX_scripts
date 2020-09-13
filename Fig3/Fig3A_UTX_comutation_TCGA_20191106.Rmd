@@ -12,7 +12,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 library(tidyr)
 library(stringr)
-co_muts <- read.delim("UTX_comutation_TCGA_20191106_table.tsv", sep = "\t")
+co_muts <- read.delim("/Volumes/shared_folder_20200225/from Allis_sharedrive/20200824_migrate/Data/TCGA_BLCA_updated2017/TCGA_2017_bladder_git_20180320/ANALYSES_TCGAbiolinks_hg19/co_mutation_with_UTX_cBIO/UTX_comutation_TCGA_20191106_table.tsv", sep = "\t")
 dim(co_muts)
 
 
@@ -70,7 +70,7 @@ co_muts_sub_3filter <- co_muts_sub[co_muts_sub$total_muts_perc > 0.03, ]
 dim(co_muts_sub_3filter)
 write.table(co_muts_sub_3filter, 'UTX_co_mutations_3perc_filter.csv', sep = ",", row.names = FALSE)
 
-
+writeLines(capture.output(sessionInfo()),  "Fig3A_UTX_comutation_TCGA_20191106_sessioninfo.txt")
 
 ```
 

@@ -11,7 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r}
 
-patient_list_path <- "../../alterations_across_samples _FGFR3_UTX_MLL3_4_TCGA2017.tsv"
+patient_list_path <- "/Volumes/shared_folder_20200225/from Allis_sharedrive/20200824_migrate/Data/TCGA_BLCA_updated2017/TCGA_2017_bladder_git_20180320/ANALYSES_TCGAbiolinks_hg19/alterations_across_samples _FGFR3_UTX_MLL3_4_TCGA2017.tsv"
 genes <-  c("FGFR3")
 # this should be some combination of "MUT", "HOMDEL", or "AMP" surrounded by "|" "&"
 alteration_grep <- c("MUT", "AMP")
@@ -56,7 +56,7 @@ names(patient_list) <- names(filtered_patients)
 # read in RNA seq data
 
 print("Reading in counts table...")
-counts <- readRDS("../normalizedCounts_revisedPatientNames_TCGAbiolinks.RData")
+counts <- readRDS("/Volumes/shared_folder_20200225/from Allis_sharedrive/20200824_migrate/Data/TCGA_BLCA_updated2017/TCGA_2017_bladder_git_20180320/ANALYSES_TCGAbiolinks_hg19/hg19/normalizedCounts_revisedPatientNames_TCGAbiolinks.RData")
 
 counts <- apply (counts, c (1, 2), function (x) {
   (as.integer(x))
@@ -68,7 +68,7 @@ counts <- counts[ , colnames(counts) %in% patients$Sample.ID]
 
 
 library(dplyr)
-meta_data <- read.csv("../../..//../metadata.csv", header = TRUE, stringsAsFactors = FALSE)
+meta_data <- read.csv("/Volumes/shared_folder_20200225/from Allis_sharedrive/20200824_migrate/Data/TCGA_BLCA_updated2017/metadata.csv", header = TRUE, stringsAsFactors = FALSE)
 
 all_lumpap_tumors <- filter(meta_data, (mRNA.cluster == "Luminal_papillary")) %>% select(Case.ID)
 counts <- counts[ , substr(colnames(counts), 1, 12) %in% all_lumpap_tumors$Case.ID]
@@ -162,7 +162,7 @@ levels(colData$FGFR3mis)
 
 # will also make a PCA plot based on the mRNA clusters to see where the genotypes fall, so used this code from otehr functions
 library(dplyr)
-meta_data <- read.csv("../../../../metadata.csv", header = TRUE, stringsAsFactors = FALSE)
+meta_data <- read.csv("/Volumes/shared_folder_20200225/from Allis_sharedrive/20200824_migrate/Data/TCGA_BLCA_updated2017/metadata.csv", header = TRUE, stringsAsFactors = FALSE)
 
 cancer_type <- meta_data[ , c(1,48)]
 
@@ -235,4 +235,5 @@ for (i in 2:length(dds_comparisons)) {
 
 }
 
+writeLines("Fig4B_20181008_FGFR3_ampVmut_lumpaponly_session_info.txt", text = capture.output(sessionInfo()))
 ```
